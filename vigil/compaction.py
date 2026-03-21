@@ -41,15 +41,9 @@ class SignalCompactor:
     def __init__(self, db):
         """
         Args:
-            db: VigilDB instance
+            db: VigilDB instance (compacted_summaries table created by VigilDB schema)
         """
         self.db = db
-        self._ensure_table()
-
-    def _ensure_table(self):
-        """Create compacted_summaries table if it doesn't exist."""
-        with self.db.connect() as conn:
-            conn.executescript(COMPACTION_SCHEMA)
 
     def compact(self, dry_run: bool = False) -> Dict:
         """

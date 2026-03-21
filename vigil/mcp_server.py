@@ -20,14 +20,15 @@ Usage:
 
 import json
 import os
-from typing import Any, Optional
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from vigil.db import VigilDB
-from vigil.signals import SignalBus
+from vigil.signals import SignalBus, SignalType
 from vigil.frames import FrameDetector
 from vigil.awareness import AwarenessCompiler
+from vigil.handoff import HandoffProtocol
 
 
 def _fmt(data: Any) -> str:
@@ -84,6 +85,11 @@ def create_server(
             _state["compiler"] = AwarenessCompiler(_get_db(), frame_detector=_get_frames())
         return _state["compiler"]
 
+    def _get_handoff() -> HandoffProtocol:
+        if "handoff" not in _state:
+            _state["handoff"] = HandoffProtocol(_get_db())
+        return _state["handoff"]
+
     # ── Tools ─────────────────────────────────────────────────────
 
     @mcp.tool()
@@ -127,13 +133,16 @@ def create_server(
             to_agent: Optional target agent for directed signals
         """
         bus = _get_bus()
-        sig = bus.emit(
-            from_agent=agent,
-            content=content,
-            signal_type=signal_type,
-            to_agent=to_agent or None,
-        )
-        # Auto-register agent on first signal
+        try:
+            sig = bus.emit(
+                from_agent=agent,
+                content=content,
+                signal_type=signal_type,
+                to_agent=to_agent or None,
+            )
+        except ValueError:
+            valid = ", ".join(t.value for t in SignalType)
+            return _fmt({"error": f"Invalid signal_type: '{signal_type}'. Valid types: {valid}"})
         _register_agent_if_new(agent, "mcp")
         return _fmt({
             "signal_id": sig.id,
@@ -197,35 +206,22 @@ def create_server(
             files_touched: Comma-separated list of files modified
             decisions: Comma-separated list of decisions made
         """
-        db = _get_db()
-        bus = _get_bus()
+        proto = _get_handoff()
 
-        # Find or create active session
-        active = db.query_one(
-            "SELECT id FROM sessions WHERE agent_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1",
-            (agent,),
+        files_list = [f.strip() for f in files_touched.split(",") if f.strip()] if files_touched else []
+        decisions_list = [d.strip() for d in decisions.split(",") if d.strip()] if decisions else []
+        steps_list = [s.strip() for s in next_steps.split(",") if s.strip()] if next_steps else []
+
+        handoff = proto.end_session(
+            agent_id=agent,
+            summary=summary,
+            files_touched=files_list,
+            decisions=decisions_list,
+            next_steps=steps_list,
         )
-        if active:
-            session_id = active["id"]
-        else:
-            session_id = db.start_session(agent)
-
-        # End the session
-        db.end_session(session_id, summary=summary, next_steps=next_steps)
-
-        # Store extended handoff data
-        _store_handoff_data(db, session_id, files_touched, decisions)
-
-        # Emit handoff signal
-        handoff_content = summary[:400]
-        if next_steps:
-            remaining = 600 - len(handoff_content) - 8
-            if remaining > 0:
-                handoff_content += f" Next: {next_steps[:remaining]}"
-        bus.emit(from_agent=agent, content=handoff_content, signal_type="handoff")
 
         return _fmt({
-            "session_id": session_id,
+            "handoff_id": handoff.id,
             "status": "handed_off",
             "summary_chars": len(summary),
         })
@@ -234,67 +230,50 @@ def create_server(
     async def vigil_resume(agent: str = "") -> str:
         """Resume from the last session's handoff.
 
-        Returns hot context + last handoff summary + any signals emitted
-        since the handoff. If agent is specified, gets that agent's last
-        handoff — otherwise gets the most recent across all agents.
+        Returns hot context + last handoff summary + signals emitted
+        since the handoff + pending next steps from recent handoffs.
 
         Args:
             agent: Agent to resume as (optional — defaults to most recent)
         """
-        db = _get_db()
-        compiler = _get_compiler()
+        proto = _get_handoff()
+        resume_agent = agent or "unknown"
+        context = proto.resume(resume_agent)
 
-        # Get hot context
-        context = compiler.boot()
+        # Serialize the last_handoff Handoff dict consistently
+        last = context.get("last_handoff")
+        if last and "agent_id" in last:
+            # Already a dict from HandoffProtocol — good
+            pass
 
-        # Get last completed session
-        if agent:
-            session = db.query_one(
-                "SELECT id, agent_id, frame, summary, next_steps, started_at, ended_at "
-                "FROM sessions WHERE agent_id = ? AND ended_at IS NOT NULL "
-                "ORDER BY ended_at DESC LIMIT 1",
-                (agent,),
-            )
-        else:
-            session = db.query_one(
-                "SELECT id, agent_id, frame, summary, next_steps, started_at, ended_at "
-                "FROM sessions WHERE ended_at IS NOT NULL "
-                "ORDER BY ended_at DESC LIMIT 1",
-            )
+        return _fmt(context)
 
-        handoff = None
-        if session:
-            handoff = {
-                "agent": session["agent_id"],
-                "summary": session.get("summary", ""),
-                "next_steps": session.get("next_steps", ""),
-                "ended_at": session.get("ended_at"),
-            }
-            # Get extended handoff data if available
-            extended = _get_handoff_data(db, session["id"])
-            if extended:
-                handoff.update(extended)
+    @mcp.tool()
+    async def vigil_chain(limit: int = 3) -> str:
+        """Get a briefing of the last N handoffs across all agents.
 
-        # Count signals since handoff
-        signals_since = 0
-        if session and session.get("ended_at"):
-            row = db.query_one(
-                "SELECT COUNT(*) as cnt FROM signals WHERE created_at > ?",
-                (session["ended_at"],),
-            )
-            if row:
-                signals_since = row["cnt"]
+        Compressed view of recent session activity — useful for
+        understanding what happened while you were away.
 
-        # Start a new session for this agent
-        resume_agent = agent or (session["agent_id"] if session else "unknown")
-        new_session = db.start_session(resume_agent, frame=context.get("frame"))
+        Args:
+            limit: Number of recent handoffs to include (default: 3)
+        """
+        proto = _get_handoff()
+        return proto.get_handoff_chain(limit=limit)
 
-        return _fmt({
-            "session_id": new_session,
-            "context": context,
-            "last_handoff": handoff,
-            "signals_since_handoff": signals_since,
-        })
+    @mcp.tool()
+    async def vigil_stale(minutes: int = 30) -> str:
+        """Find agents with open sessions that have gone silent.
+
+        Detects sessions where no signals have been emitted for N minutes.
+        Useful for daemon cleanup or alerting.
+
+        Args:
+            minutes: Silence threshold in minutes (default: 30)
+        """
+        proto = _get_handoff()
+        stale = proto.auto_detect_stale(minutes=minutes)
+        return _fmt({"stale_sessions": stale, "threshold_minutes": minutes})
 
     @mcp.tool()
     async def vigil_focus(
@@ -405,58 +384,17 @@ def create_server(
     # ── Helpers ───────────────────────────────────────────────────
 
     def _register_agent_if_new(agent_id: str, agent_type: str = "unknown"):
-        """Auto-register agent in the agents table if it exists."""
+        """Auto-register agent in the agents table."""
         db = _get_db()
-        try:
-            db.execute(
-                "INSERT OR IGNORE INTO agents (id, name, type, last_seen, session_count) "
-                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0)",
-                (agent_id, agent_id, agent_type),
-            )
-            db.execute(
-                "UPDATE agents SET last_seen = CURRENT_TIMESTAMP WHERE id = ?",
-                (agent_id,),
-            )
-        except Exception:
-            # agents table may not exist yet (pre-integration)
-            pass
-
-    def _store_handoff_data(db: VigilDB, session_id: int, files_touched: str, decisions: str):
-        """Store extended handoff data. Gracefully handles missing columns."""
-        try:
-            db.execute(
-                "UPDATE sessions SET summary = summary || ? WHERE id = ?",
-                ("", session_id),
-            )
-        except Exception:
-            pass
-        # Store as JSON in a handoff metadata signal if extended columns don't exist
-        if files_touched or decisions:
-            meta = {}
-            if files_touched:
-                meta["files_touched"] = [f.strip() for f in files_touched.split(",") if f.strip()]
-            if decisions:
-                meta["decisions"] = [d.strip() for d in decisions.split(",") if d.strip()]
-            try:
-                db.execute(
-                    "INSERT INTO signals (from_agent, signal_type, content) VALUES (?, ?, ?)",
-                    (f"_handoff_{session_id}", "observation", json.dumps(meta)[:400]),
-                )
-            except Exception:
-                pass
-
-    def _get_handoff_data(db: VigilDB, session_id: int) -> Optional[dict]:
-        """Retrieve extended handoff data."""
-        row = db.query_one(
-            "SELECT content FROM signals WHERE from_agent = ? ORDER BY created_at DESC LIMIT 1",
-            (f"_handoff_{session_id}",),
+        db.execute(
+            "INSERT OR IGNORE INTO agents (id, name, type, last_seen, session_count) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0)",
+            (agent_id, agent_id, agent_type),
         )
-        if row and row.get("content"):
-            try:
-                return json.loads(row["content"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return None
+        db.execute(
+            "UPDATE agents SET last_seen = CURRENT_TIMESTAMP WHERE id = ?",
+            (agent_id,),
+        )
 
     return mcp
 

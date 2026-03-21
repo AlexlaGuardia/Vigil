@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 from vigil.signals import SignalBus, SignalType
+from vigil.awareness import AwarenessCompiler
 
 # Schema for handoffs table — integration pass adds this to db.py SCHEMA
 HANDOFF_SCHEMA = """
@@ -116,16 +117,10 @@ class HandoffProtocol:
     def __init__(self, db):
         """
         Args:
-            db: VigilDB instance
+            db: VigilDB instance (handoffs table created by VigilDB schema)
         """
         self.db = db
         self.bus = SignalBus(db)
-        self._ensure_table()
-
-    def _ensure_table(self):
-        """Create handoffs table if it doesn't exist."""
-        with self.db.connect() as conn:
-            conn.executescript(HANDOFF_SCHEMA)
 
     def end_session(
         self,
@@ -248,8 +243,6 @@ class HandoffProtocol:
         Returns:
             Dict with awareness, last_handoff, signals_since, and pending_next_steps
         """
-        from vigil.awareness import AwarenessCompiler
-
         # Hot awareness
         compiler = AwarenessCompiler(self.db)
         awareness = compiler.boot()

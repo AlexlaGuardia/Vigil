@@ -55,6 +55,8 @@ class TestServerCreation:
             "vigil_signals",
             "vigil_handoff",
             "vigil_resume",
+            "vigil_chain",
+            "vigil_stale",
             "vigil_focus",
             "vigil_frames",
             "vigil_agents",
@@ -160,7 +162,7 @@ class TestVigilHandoff:
         })
         data = _parse(result)
         assert data["status"] == "handed_off"
-        assert data["session_id"] >= 1
+        assert data["handoff_id"] >= 1
 
     @pytest.mark.anyio
     async def test_handoff_with_files(self, server):
@@ -179,12 +181,12 @@ class TestVigilResume:
     async def test_resume_empty(self, server):
         result = await server.call_tool("vigil_resume", {})
         data = _parse(result)
-        assert data["session_id"] >= 1
         assert data["last_handoff"] is None
+        assert "resuming_as" in data
 
     @pytest.mark.anyio
     async def test_resume_after_handoff(self, server):
-        # Create a handoff
+        # Create a handoff via MCP (uses HandoffProtocol)
         await server.call_tool("vigil_handoff", {
             "agent": "agent-1",
             "summary": "finished phase 1",
@@ -194,8 +196,48 @@ class TestVigilResume:
         result = await server.call_tool("vigil_resume", {"agent": "agent-1"})
         data = _parse(result)
         assert data["last_handoff"] is not None
-        assert data["last_handoff"]["agent"] == "agent-1"
+        assert data["last_handoff"]["agent_id"] == "agent-1"
         assert "finished phase 1" in data["last_handoff"]["summary"]
+        # signals_since_handoff should be a list, not an int
+        assert isinstance(data["signals_since_handoff"], list)
+
+
+class TestVigilChain:
+    @pytest.mark.anyio
+    async def test_chain_empty(self, server):
+        result = await server.call_tool("vigil_chain", {})
+        text = result[0][0].text
+        assert "No previous handoffs" in text
+
+    @pytest.mark.anyio
+    async def test_chain_after_handoffs(self, server):
+        await server.call_tool("vigil_handoff", {"agent": "a", "summary": "did thing 1"})
+        await server.call_tool("vigil_handoff", {"agent": "b", "summary": "did thing 2"})
+        result = await server.call_tool("vigil_chain", {"limit": 2})
+        text = result[0][0].text
+        assert "did thing 1" in text
+        assert "did thing 2" in text
+
+
+class TestVigilStale:
+    @pytest.mark.anyio
+    async def test_stale_empty(self, server):
+        result = await server.call_tool("vigil_stale", {})
+        data = _parse(result)
+        assert data["stale_sessions"] == []
+
+
+class TestVigilSignalValidation:
+    @pytest.mark.anyio
+    async def test_invalid_signal_type(self, server):
+        result = await server.call_tool("vigil_signal", {
+            "agent": "test",
+            "content": "hello",
+            "signal_type": "bogus",
+        })
+        data = _parse(result)
+        assert "error" in data
+        assert "bogus" in data["error"]
 
 
 class TestVigilFocus:
