@@ -194,10 +194,15 @@ def cmd_serve(args):
     db_path = require_db()
 
     transport = args.transport
-    print(f"Starting Vigil MCP server (transport: {transport})")
+    print(f"Starting Vigil server (transport: {transport})")
 
-    if transport == "sse":
-        print(f"  Host: {args.host}:{args.port}")
+    if transport == "http":
+        from vigil.api import run_http
+        print(f"  REST API: http://{args.host}:{args.port}")
+        print(f"  Docs:     http://{args.host}:{args.port}/docs")
+        run_http(db_path=db_path, host=args.host, port=args.port)
+    elif transport == "sse":
+        print(f"  MCP SSE: http://{args.host}:{args.port}")
         run_sse(db_path=db_path, host=args.host, port=args.port)
     else:
         run_stdio(db_path=db_path)
@@ -360,7 +365,7 @@ def main():
 
     # serve (MCP server)
     serve_parser = subparsers.add_parser("serve", help="Start the Vigil MCP server")
-    serve_parser.add_argument("--transport", default="stdio", choices=["stdio", "sse"], help="Transport protocol")
+    serve_parser.add_argument("--transport", default="stdio", choices=["stdio", "sse", "http"], help="Transport protocol")
     serve_parser.add_argument("--host", default="127.0.0.1", help="SSE host (default: 127.0.0.1)")
     serve_parser.add_argument("--port", type=int, default=8300, help="SSE port (default: 8300)")
 
