@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Signals — Vigil{% endblock %}
+
+{% block content %}
+<div class="v-page-header v-page-header-row">
+  <h2>Signals</h2>
+  <div class="v-time-selector">
+    <a href="?hours=1" class="{% if hours == 1 %}v-time-active{% endif %}" role="button">1h</a>
+    <a href="?hours=6" class="{% if hours == 6 %}v-time-active{% endif %}" role="button">6h</a>
+    <a href="?hours=24" class="{% if hours == 24 %}v-time-active{% endif %}" role="button">24h</a>
+    <a href="?hours=168" class="{% if hours == 168 %}v-time-active{% endif %}" role="button">7d</a>
+  </div>
+</div>
+
+{% if signals %}
+<div class="v-signal-list">
+  {% for s in signals %}
+  <div class="v-signal-row">
+    <div class="v-signal-meta">
+      <code class="v-ts">{{ s.created_at }}</code>
+      <span class="v-badge v-badge-agent">{{ s.from_agent }}</span>
+      <span class="v-badge v-badge-type-{{ s.signal_type }}">{{ s.signal_type }}</span>
+    </div>
+    <p class="v-signal-content v-mono">{{ s.content }}</p>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="v-empty">
+  <p>No signals in the last {{ hours }} hour{{ "s" if hours != 1 else "" }}.</p>
+</div>
+{% endif %}
+{% endblock %}

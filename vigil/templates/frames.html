@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Frames — Vigil{% endblock %}
+
+{% block content %}
+<div class="v-page-header">
+  <h2>Frames</h2>
+  <p class="v-muted">
+    Active frame: <strong>{{ current_frame }}</strong>
+  </p>
+</div>
+
+{% if frames %}
+<div class="v-grid">
+  {% for f in frames %}
+  <article class="v-card {% if f.id == current_frame %}v-card-active{% endif %}">
+    <header>
+      <span class="v-frame-name">{{ f.id }}</span>
+      {% if f.id == current_frame %}
+      <span class="v-badge v-badge-active">active</span>
+      {% endif %}
+    </header>
+
+    {% if f.description %}
+    <p class="v-frame-desc">{{ f.description }}</p>
+    {% endif %}
+
+    {% if f.triggers %}
+    <div class="v-trigger-list">
+      {% for t in f.triggers %}
+      <span class="v-chip">{{ t }}</span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="v-muted v-small">No trigger keywords.</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="v-empty">
+  <p>No frames registered.</p>
+  <code>vigil frames --add myframe --triggers "deploy prod"</code>
+</div>
+{% endif %}
+{% endblock %}

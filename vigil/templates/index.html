@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Overview — Vigil{% endblock %}
+
+{% block content %}
+<!-- Stat cards -->
+<div class="v-stats-row">
+  <article class="v-stat-card">
+    <div class="v-stat-label">Current Frame</div>
+    <div class="v-stat-value v-mono">{{ frame or "default" }}</div>
+  </article>
+  <article class="v-stat-card">
+    <div class="v-stat-label">Active Agents</div>
+    <div class="v-stat-value">{{ agents | length }}</div>
+  </article>
+  <article class="v-stat-card">
+    <div class="v-stat-label">Signals (last hour)</div>
+    <div class="v-stat-value">{{ signals | length }}</div>
+  </article>
+</div>
+
+<!-- Awareness + Focus row -->
+<div class="v-two-col">
+
+  <!-- Awareness -->
+  <section class="v-section">
+    <div class="v-section-header">
+      <h3>Awareness</h3>
+      {% if compiled_at %}
+      <span class="v-muted v-small">compiled {{ compiled_at }}</span>
+      {% endif %}
+    </div>
+    <div
+      id="awareness-container"
+      hx-get="/partials/awareness"
+      hx-trigger="every 10s"
+      hx-swap="innerHTML"
+    >
+      {% include "partials/awareness.html" %}
+    </div>
+  </section>
+
+  <!-- Focus queue -->
+  <section class="v-section">
+    <div class="v-section-header">
+      <h3>Focus Queue</h3>
+      <span class="v-muted v-small">{{ focus | length }} item{{ "s" if focus | length != 1 else "" }}</span>
+    </div>
+    {% if focus %}
+    <div class="v-focus-list">
+      {% for item in focus %}
+      <div class="v-focus-row">
+        <span class="v-badge v-priority-{{ 'high' if item.priority <= 2 else ('mid' if item.priority <= 4 else 'low') }}">
+          P{{ item.priority }}
+        </span>
+        <span class="v-focus-desc">{{ item.description }}</span>
+        {% if item.owner %}
+        <span class="v-badge v-badge-agent v-small">{{ item.owner }}</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="v-muted v-small">No active focus items.</p>
+    {% endif %}
+  </section>
+
+</div>
+
+<!-- Signal feed + Agents row -->
+<div class="v-two-col">
+
+  <!-- Live signal feed -->
+  <section class="v-section">
+    <div class="v-section-header">
+      <h3>Live Signals</h3>
+      <span class="v-muted v-small">polling every 5s</span>
+    </div>
+    <div
+      id="signal-feed"
+      hx-get="/partials/signals"
+      hx-trigger="every 5s"
+      hx-swap="innerHTML"
+    >
+      {% include "partials/signal_list.html" %}
+    </div>
+  </section>
+
+  <!-- Active agents table -->
+  <section class="v-section">
+    <div class="v-section-header">
+      <h3>Agents</h3>
+      <a href="/dashboard/agents" class="v-small">view all</a>
+    </div>
+    {% if agents %}
+    <table class="v-table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Signals</th>
+          <th>Last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in agents %}
+        <tr>
+          <td><span class="v-badge v-badge-agent">{{ a.from_agent }}</span></td>
+          <td class="v-mono">{{ a.signal_count }}</td>
+          <td class="v-ts v-muted">{{ a.last_seen or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="v-muted v-small">No agents yet.</p>
+    {% endif %}
+  </section>
+
+</div>
+{% endblock %}

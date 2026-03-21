@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Vigil{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+  <header class="v-header">
+    <nav class="container-fluid">
+      <ul>
+        <li><a href="/" class="v-brand">vigil</a></li>
+      </ul>
+      <ul>
+        <li>
+          <a href="/" class="{% if request.url.path == '/' %}v-nav-active{% endif %}">
+            Overview
+          </a>
+        </li>
+        <li>
+          <a href="/dashboard/agents" class="{% if '/agents' in request.url.path %}v-nav-active{% endif %}">
+            Agents
+          </a>
+        </li>
+        <li>
+          <a href="/dashboard/signals" class="{% if '/signals' in request.url.path %}v-nav-active{% endif %}">
+            Signals
+          </a>
+        </li>
+        <li>
+          <a href="/dashboard/handoffs" class="{% if '/handoffs' in request.url.path %}v-nav-active{% endif %}">
+            Handoffs
+          </a>
+        </li>
+        <li>
+          <a href="/dashboard/frames" class="{% if '/frames' in request.url.path %}v-nav-active{% endif %}">
+            Frames
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="container v-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="v-footer">
+    <div class="container-fluid">
+      <small>Vigil v0.5.0 — Cognitive infrastructure for AI agents</small>
+    </div>
+  </footer>
+</body>
+</html>

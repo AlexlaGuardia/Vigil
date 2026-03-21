@@ -1,0 +1,12 @@
+{% for s in signals %}
+<div class="v-signal-row">
+  <div class="v-signal-meta">
+    <code class="v-ts">{{ s.created_at }}</code>
+    <span class="v-badge v-badge-agent">{{ s.from_agent }}</span>
+    <span class="v-badge v-badge-type-{{ s.signal_type }}">{{ s.signal_type }}</span>
+  </div>
+  <p class="v-signal-content v-mono">{{ s.content[:100] }}{% if s.content | length > 100 %}…{% endif %}</p>
+</div>
+{% else %}
+<p class="v-muted v-small">No signals yet.</p>
+{% endfor %}

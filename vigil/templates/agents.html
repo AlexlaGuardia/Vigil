@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Agents — Vigil{% endblock %}
+
+{% block content %}
+<div class="v-page-header">
+  <h2>Agents</h2>
+  <p class="v-muted">All agents that have emitted signals into this Vigil instance.</p>
+</div>
+
+{% if agents %}
+<div class="v-grid">
+  {% for agent in agents %}
+  <article class="v-card">
+    <header>
+      <span class="v-badge v-badge-agent">{{ agent.from_agent }}</span>
+    </header>
+
+    <div class="v-card-stats">
+      <div class="v-stat-inline">
+        <span class="v-stat-value">{{ agent.signal_count }}</span>
+        <span class="v-muted">signals</span>
+      </div>
+    </div>
+
+    <div class="v-meta-block">
+      <div><span class="v-label">First seen</span> <code>{{ agent.first_seen or "—" }}</code></div>
+      <div><span class="v-label">Last seen</span> <code>{{ agent.last_seen or "—" }}</code></div>
+    </div>
+
+    {% if agent.sessions %}
+    <details>
+      <summary class="v-details-summary">Recent sessions ({{ agent.sessions | length }})</summary>
+      <div class="v-sessions-list">
+        {% for s in agent.sessions %}
+        <div class="v-session-row">
+          <p class="v-session-summary">{{ s.summary or "No summary." }}</p>
+          <div class="v-meta-block">
+            <div><span class="v-label">Started</span> <code>{{ s.started_at or "—" }}</code></div>
+            <div><span class="v-label">Ended</span> <code>{{ s.ended_at or "ongoing" }}</code></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% else %}
+    <p class="v-muted v-small">No sessions recorded.</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="v-empty">
+  <p>No agents have emitted signals yet.</p>
+  <code>vigil signal --agent myagent --content "hello"</code>
+</div>
+{% endif %}
+{% endblock %}

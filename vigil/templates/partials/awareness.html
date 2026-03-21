@@ -1,0 +1,8 @@
+{% if awareness %}
+<p class="v-awareness-text v-mono">{{ awareness }}</p>
+{% else %}
+<p class="v-muted">No awareness compiled yet. Run <code>vigil compile</code>.</p>
+{% endif %}
+{% if awareness_updated %}
+<p class="v-muted v-small">Updated: {{ awareness_updated }}</p>
+{% endif %}

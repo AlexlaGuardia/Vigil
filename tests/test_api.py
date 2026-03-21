@@ -297,6 +297,53 @@ class TestAgents:
         assert r.status_code == 404
 
 
+class TestDashboard:
+    @pytest.mark.anyio
+    async def test_index(self, client):
+        r = await client.get("/")
+        assert r.status_code == 200
+        assert "Vigil" in r.text
+
+    @pytest.mark.anyio
+    async def test_agents_page(self, client):
+        r = await client.get("/dashboard/agents")
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_signals_page(self, client):
+        r = await client.get("/dashboard/signals")
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_handoffs_page(self, client):
+        r = await client.get("/dashboard/handoffs")
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_frames_page(self, client):
+        r = await client.get("/dashboard/frames")
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_partials_signals(self, client):
+        r = await client.get("/partials/signals")
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_partials_awareness(self, client):
+        r = await client.get("/partials/awareness")
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_index_with_data(self, client):
+        """Dashboard renders with actual data."""
+        await client.post("/signal", json={"agent": "test-agent", "content": "hello world"})
+        await client.post("/compile")
+        r = await client.get("/")
+        assert r.status_code == 200
+        assert "test-agent" in r.text
+
+
 class TestCompact:
     @pytest.mark.anyio
     async def test_compact_empty(self, client):

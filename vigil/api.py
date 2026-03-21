@@ -21,8 +21,12 @@ import json
 import os
 from typing import Optional, List
 
+from pathlib import Path as FilePath
+
 from fastapi import FastAPI, HTTPException, Depends, Request, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from vigil.db import VigilDB
@@ -99,6 +103,121 @@ def create_app(
         description="Cognitive infrastructure for AI agents",
         version="0.5.0",
     )
+
+    # ── Templates & static files ──────────────────────────────
+
+    _pkg_dir = FilePath(__file__).parent
+    _templates_dir = _pkg_dir / "templates"
+    _static_dir = _pkg_dir / "static"
+
+    templates = Jinja2Templates(directory=str(_templates_dir)) if _templates_dir.exists() else None
+
+    if _static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
+    # ── Dashboard routes ──────────────────────────────────────
+
+    @app.get("/", response_class=HTMLResponse)
+    async def dashboard(request: Request):
+        """Main dashboard — live overview."""
+        if not templates:
+            return HTMLResponse("<h1>Vigil</h1><p>Dashboard templates not found. Use the API at <a href='/docs'>/docs</a>.</p>")
+        ctx = state["compiler"].boot()
+        awareness = state["db"].get_awareness()
+        focus = state["db"].get_active_focus(limit=10)
+        recent = state["bus"].read(hours=1, limit=20)
+        agents_rows = state["db"].query_all(
+            "SELECT from_agent, COUNT(*) as signal_count, MAX(created_at) as last_seen "
+            "FROM signals GROUP BY from_agent ORDER BY last_seen DESC LIMIT 10"
+        )
+        return templates.TemplateResponse(request, "index.html", {
+            "frame": ctx.get("frame", "default"),
+            "awareness": awareness.get("summary", "") if awareness else "",
+            "awareness_updated": awareness.get("updated_at", "") if awareness else "",
+            "focus": focus,
+            "signals": [s.to_dict() for s in recent],
+            "agents": agents_rows,
+            "compiled_at": ctx.get("compiled_at", ""),
+        })
+
+    @app.get("/dashboard/agents", response_class=HTMLResponse)
+    async def dashboard_agents(request: Request):
+        """Agents page."""
+        if not templates:
+            return HTMLResponse("Templates not found.")
+        agents_rows = state["db"].query_all(
+            "SELECT from_agent, COUNT(*) as signal_count, MAX(created_at) as last_seen, "
+            "MIN(created_at) as first_seen FROM signals GROUP BY from_agent ORDER BY last_seen DESC"
+        )
+        for a in agents_rows:
+            sessions = state["db"].query_all(
+                "SELECT summary, started_at, ended_at FROM sessions "
+                "WHERE agent_id = ? ORDER BY started_at DESC LIMIT 3",
+                (a["from_agent"],),
+            )
+            a["sessions"] = sessions
+        return templates.TemplateResponse(request, "agents.html", {"agents": agents_rows})
+
+    @app.get("/dashboard/signals", response_class=HTMLResponse)
+    async def dashboard_signals(request: Request, hours: int = Query(6, ge=1, le=168)):
+        """Signals timeline page."""
+        if not templates:
+            return HTMLResponse("Templates not found.")
+        recent = state["bus"].read(hours=hours, limit=100)
+        return templates.TemplateResponse(request, "signals.html", {
+            "signals": [s.to_dict() for s in recent],
+            "hours": hours,
+        })
+
+    @app.get("/dashboard/handoffs", response_class=HTMLResponse)
+    async def dashboard_handoffs(request: Request):
+        """Handoff chain page."""
+        if not templates:
+            return HTMLResponse("Templates not found.")
+        handoffs = state["db"].query_all(
+            "SELECT * FROM handoffs ORDER BY ended_at DESC LIMIT 20"
+        )
+        from vigil.handoff import _parse_json_list
+        for h in handoffs:
+            h["files_touched"] = _parse_json_list(h.get("files_touched"))
+            h["decisions"] = _parse_json_list(h.get("decisions"))
+            h["next_steps"] = _parse_json_list(h.get("next_steps"))
+        return templates.TemplateResponse(request, "handoffs.html", {"handoffs": handoffs})
+
+    @app.get("/dashboard/frames", response_class=HTMLResponse)
+    async def dashboard_frames(request: Request):
+        """Frames map page."""
+        if not templates:
+            return HTMLResponse("Templates not found.")
+        frames = state["db"].get_frames()
+        current = state["compiler"].boot().get("frame", "default")
+        return templates.TemplateResponse(request, "frames.html", {
+            "frames": frames,
+            "current_frame": current,
+        })
+
+    # ── htmx partials (for live updates) ──────────────────────
+
+    @app.get("/partials/signals", response_class=HTMLResponse)
+    async def partial_signals(request: Request):
+        """Signal list partial — htmx polls this for live updates."""
+        if not templates:
+            return HTMLResponse("")
+        recent = state["bus"].read(hours=1, limit=20)
+        return templates.TemplateResponse(request, "partials/signal_list.html", {
+            "signals": [s.to_dict() for s in recent],
+        })
+
+    @app.get("/partials/awareness", response_class=HTMLResponse)
+    async def partial_awareness(request: Request):
+        """Awareness partial — htmx polls this."""
+        if not templates:
+            return HTMLResponse("")
+        awareness = state["db"].get_awareness()
+        return templates.TemplateResponse(request, "partials/awareness.html", {
+            "awareness": awareness.get("summary", "") if awareness else "",
+            "awareness_updated": awareness.get("updated_at", "") if awareness else "",
+        })
 
     # ── Auth dependency ───────────────────────────────────────
 

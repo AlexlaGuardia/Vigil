@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Handoffs — Vigil{% endblock %}
+
+{% block content %}
+<div class="v-page-header">
+  <h2>Handoffs</h2>
+  <p class="v-muted">Session boundaries between agents. Most recent first.</p>
+</div>
+
+{% if handoffs %}
+<div class="v-timeline">
+  {% for h in handoffs %}
+  <div class="v-timeline-item">
+    <div class="v-timeline-dot"></div>
+    <div class="v-timeline-body">
+      <div class="v-timeline-header">
+        <span class="v-badge v-badge-agent">{{ h.agent_id }}</span>
+        <code class="v-ts v-muted">{{ h.ended_at or h.started_at or "—" }}</code>
+      </div>
+
+      <p class="v-handoff-summary">{{ h.summary or "No summary provided." }}</p>
+
+      {% if h.files_touched %}
+      <details>
+        <summary class="v-details-summary">Files touched ({{ h.files_touched | length }})</summary>
+        <div class="v-file-list">
+          {% for f in h.files_touched %}
+          <code class="v-file-tag">{{ f }}</code>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+
+      {% if h.decisions %}
+      <details>
+        <summary class="v-details-summary">Decisions ({{ h.decisions | length }})</summary>
+        <ul class="v-detail-list">
+          {% for d in h.decisions %}
+          <li>{{ d }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+
+      {% if h.next_steps %}
+      <details>
+        <summary class="v-details-summary">Next steps ({{ h.next_steps | length }})</summary>
+        <ul class="v-detail-list">
+          {% for n in h.next_steps %}
+          <li>{{ n }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% else %}
+<div class="v-empty">
+  <p>No handoffs recorded yet.</p>
+  <code>vigil handoff --agent myagent --summary "Completed auth module"</code>
+</div>
+{% endif %}
+{% endblock %}
