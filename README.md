@@ -18,10 +18,20 @@ AI agents forget everything between sessions. They load all tools regardless of 
 
 **Signal Protocol** — Lightweight event bus with content budgets. Agents emit signals (max 300-800 chars by type), the daemon synthesizes them into awareness. Agents coordinate without direct communication.
 
+**Session Handoff** — Agents end sessions with structured summaries (files touched, decisions, next steps). The next agent boots with full context of what happened and what to do next.
+
+**Signal Compaction** — Old signals get summarized, not deleted. Tiered retention (raw → daily → weekly → monthly) keeps context fresh without losing history.
+
+**MCP Server** — Expose Vigil as an MCP tool server. Any Claude Code, Claude Desktop, Cursor, or Windsurf agent connects and gets persistent awareness instantly.
+
 ## Install
 
 ```bash
+# Core library (daemon, signals, handoff, compaction)
 pip install vigil-agent
+
+# With MCP server support
+pip install vigil-agent[mcp]
 ```
 
 ## Quickstart
@@ -41,17 +51,71 @@ vigil status
 
 # See what agents boot with
 vigil boot --json
+
+# End a session with a structured handoff
+vigil handoff my-agent "Shipped auth module" --files "auth.py, tests.py" --next-steps "Write docs"
+
+# Resume from where the last agent left off
+vigil resume next-agent
+
+# Start as an MCP server (Claude Code / Claude Desktop)
+vigil serve
+
+# Run signal compaction manually
+vigil compact --dry-run
 ```
+
+## MCP Server
+
+Vigil runs as an MCP server so any AI agent can connect and get persistent awareness.
+
+```bash
+# stdio (Claude Code, Claude Desktop)
+vigil serve
+
+# SSE (remote clients)
+vigil serve --transport sse --port 8300
+```
+
+**Claude Desktop config** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "vigil": {
+      "command": "vigil",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+**12 MCP tools available:**
+
+| Tool | Description |
+|------|-------------|
+| `vigil_boot` | Boot with pre-compiled hot context |
+| `vigil_compile` | Force a fresh awareness compilation |
+| `vigil_signal` | Emit a signal from an agent |
+| `vigil_status` | Get current awareness state |
+| `vigil_signals` | Read recent signals |
+| `vigil_handoff` | End session with structured handoff |
+| `vigil_resume` | Resume from last handoff |
+| `vigil_chain` | Get briefing of last N handoffs |
+| `vigil_stale` | Find agents that have gone silent |
+| `vigil_focus` | Manage priority work queue |
+| `vigil_frames` | Manage context frames |
+| `vigil_agents` | List known agents and activity |
 
 ## Python API
 
 ```python
-from vigil import VigilDB, SignalBus, FrameDetector, AwarenessCompiler
+from vigil import VigilDB, SignalBus, AwarenessCompiler, HandoffProtocol
 
 # Initialize
 db = VigilDB("vigil.db")
 bus = SignalBus(db)
 compiler = AwarenessCompiler(db)
+proto = HandoffProtocol(db)
 
 # Emit signals from agents
 bus.emit("backend-agent", "Deployed auth service v2")
@@ -64,6 +128,19 @@ context = compiler.compile()
 
 # Boot an agent with pre-compiled context (<1 second)
 hot_context = compiler.boot()
+
+# Structured session handoff
+proto.end_session(
+    agent_id="backend-agent",
+    summary="Shipped auth v2 with JWT tokens",
+    files_touched=["auth.py", "middleware.py"],
+    decisions=["Switched from session cookies to JWT"],
+    next_steps=["Add rate limiting", "Write integration tests"],
+)
+
+# Next agent resumes with full context
+context = proto.resume("next-agent")
+# {'awareness': ..., 'last_handoff': {...}, 'signals_since_handoff': [...], 'pending_next_steps': [...]}
 ```
 
 ### Frame-Based Tool Filtering
@@ -90,26 +167,19 @@ tool_count("backend")     # 2 (deploy + health)
 tool_count("frontend")    # 2 (render + health)
 ```
 
-### Daemon
+### Signal Compaction
 
 ```python
-from vigil import VigilDaemon
+from vigil import SignalCompactor
 
-# Run the awareness daemon
-daemon = VigilDaemon(
-    db_path="vigil.db",
-    compile_interval=90,          # Seconds between compiles
-    awareness_file="AWARENESS.md", # Optional: write markdown
-    on_compile=lambda ctx: print(f"Compiled: {ctx['frame']}"),
-)
+compactor = SignalCompactor(db)
 
-# Blocking
-daemon.run()
+# Run compaction (tiered: raw → daily → weekly → monthly)
+stats = compactor.compact()
+# {'daily_summaries': 5, 'weekly_digests': 2, 'monthly_snapshots': 1, 'signals_compacted': 47}
 
-# Or background thread
-daemon.start()
-# ... do other work ...
-daemon.stop()
+# Browse compacted history
+history = compactor.get_history(days=30, agent="backend-agent")
 ```
 
 ### Signal Types & Budgets
@@ -121,12 +191,6 @@ daemon.stop()
 | `summary` | 800 chars | Comprehensive summaries |
 | `alert` | 300 chars | Urgent notifications |
 
-```python
-bus.emit("agent", "Working on auth", signal_type="observation")
-bus.emit("agent", "Done for today. Next: finish tests.", signal_type="handoff")
-bus.emit("monitor", "API latency spike!", signal_type="alert")
-```
-
 ## Architecture
 
 ```
@@ -134,12 +198,13 @@ Agents emit signals → SQLite → Daemon compiles → Hot context → Agents bo
                                     ↓
                             Frame detection
                             Awareness synthesis
+                            Signal compaction
                             Focus queue
 ```
 
 - **Zero infrastructure** — SQLite storage, no Redis/Postgres/Docker required
 - **Framework-agnostic** — Works with any MCP-compatible client, or standalone
-- **Lightweight** — Pure Python, no heavy dependencies
+- **Lightweight** — Pure Python, no heavy dependencies (mcp is optional)
 
 ## CLI Reference
 
@@ -148,11 +213,17 @@ Agents emit signals → SQLite → Daemon compiles → Hot context → Agents bo
 | `vigil init` | Initialize a new project |
 | `vigil daemon start` | Start the awareness daemon |
 | `vigil daemon status` | Check daemon compilation status |
+| `vigil serve` | Start as MCP server (stdio or SSE) |
 | `vigil signal <agent> <msg>` | Emit a signal |
 | `vigil status` | Show current awareness |
 | `vigil boot` | Show compiled hot context |
 | `vigil frames` | List registered frames |
 | `vigil tools [--frame X]` | List tools (optionally filtered) |
+| `vigil handoff <agent> <summary>` | Write a structured session handoff |
+| `vigil resume <agent>` | Resume from last handoff |
+| `vigil history` | Browse compacted signal history |
+| `vigil agents` | List known agents |
+| `vigil compact` | Run signal compaction manually |
 
 ## Why Not Just Use Mem0/Letta/LangGraph?
 
@@ -160,12 +231,14 @@ Agents emit signals → SQLite → Daemon compiles → Hot context → Agents bo
 |---|---|---|---|---|
 | **Approach** | Awareness daemon | Memory retrieval | Stateful runtime | State machine |
 | **Context** | Pre-compiled, instant boot | Query on demand | LLM-managed | Checkpoint-based |
-| **Tool filtering** | Frame-based (50-90% token savings) | None | None | None |
-| **Multi-agent** | Signal protocol | Shared memory | Single agent | Graph edges |
-| **Infrastructure** | SQLite (zero setup) | API calls + LLM costs | Full runtime replacement | LangChain ecosystem |
+| **Tool filtering** | Frame-based (50-90% savings) | None | None | None |
+| **Multi-agent** | Signal protocol + handoff | Shared memory | Single agent | Graph edges |
+| **Compaction** | Tiered (daily/weekly/monthly) | None | LLM-managed | None |
+| **MCP native** | Built-in server | No | No | No |
+| **Infrastructure** | SQLite (zero setup) | API + LLM costs | Full runtime | LangChain ecosystem |
 | **Lock-in** | None (framework-agnostic) | Mem0 API | Letta platform | LangChain |
 
-Vigil is the nervous system. Others are the filing cabinet. Use them together if you want — Vigil handles awareness and coordination, Mem0/Letta handles deep memory.
+Vigil is the nervous system. Others are the filing cabinet. Use them together — Vigil handles awareness and coordination, Mem0/Letta handles deep memory.
 
 ## License
 
