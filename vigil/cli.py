@@ -24,6 +24,15 @@ def get_db_path() -> str:
     return os.environ.get("VIGIL_DB", "vigil.db")
 
 
+def require_db() -> str:
+    """Get DB path and exit if not initialized."""
+    db_path = get_db_path()
+    if not Path(db_path).exists():
+        print(f"Not initialized. Run 'vigil init' first. (looked for {db_path})")
+        sys.exit(1)
+    return db_path
+
+
 def cmd_init(args):
     """Initialize a new Vigil project."""
     from vigil.db import VigilDB
@@ -56,10 +65,7 @@ def cmd_daemon_start(args):
         datefmt="%H:%M:%S",
     )
 
-    db_path = get_db_path()
-    if not Path(db_path).exists():
-        print(f"No database at {db_path}. Run 'vigil init' first.")
-        sys.exit(1)
+    db_path = require_db()
 
     daemon = VigilDaemon(
         db_path=db_path,
@@ -78,12 +84,7 @@ def cmd_daemon_status(args):
     """Check daemon status by reading brain_state."""
     from vigil.db import VigilDB
 
-    db_path = get_db_path()
-    if not Path(db_path).exists():
-        print("Not initialized. Run 'vigil init' first.")
-        sys.exit(1)
-
-    db = VigilDB(db_path)
+    db = VigilDB(require_db())
     state = db.get_brain_state()
 
     if not state or not state.get("compiled_at"):
@@ -104,7 +105,7 @@ def cmd_signal(args):
     from vigil.db import VigilDB
     from vigil.signals import SignalBus
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
     bus = SignalBus(db)
 
     sig = bus.emit(
@@ -120,7 +121,7 @@ def cmd_status(args):
     """Show current awareness."""
     from vigil.db import VigilDB
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
 
     awareness = db.get_awareness()
     if not awareness or not awareness.get("summary"):
@@ -135,7 +136,7 @@ def cmd_frames(args):
     """List registered frames."""
     from vigil.db import VigilDB
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
     frames = db.get_frames()
 
     if not frames:
@@ -168,7 +169,7 @@ def cmd_boot(args):
     from vigil.db import VigilDB
     from vigil.awareness import AwarenessCompiler
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
     compiler = AwarenessCompiler(db)
     context = compiler.boot()
 
@@ -190,10 +191,7 @@ def cmd_serve(args):
     """Start the Vigil MCP server."""
     from vigil.mcp_server import run_stdio, run_sse
 
-    db_path = get_db_path()
-    if not Path(db_path).exists():
-        print(f"No database at {db_path}. Run 'vigil init' first.")
-        sys.exit(1)
+    db_path = require_db()
 
     transport = args.transport
     print(f"Starting Vigil MCP server (transport: {transport})")
@@ -210,7 +208,7 @@ def cmd_handoff(args):
     from vigil.db import VigilDB
     from vigil.handoff import HandoffProtocol
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
     proto = HandoffProtocol(db)
 
     files = [f.strip() for f in args.files.split(",") if f.strip()] if args.files else []
@@ -235,7 +233,7 @@ def cmd_resume(args):
     from vigil.db import VigilDB
     from vigil.handoff import HandoffProtocol
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
     proto = HandoffProtocol(db)
 
     context = proto.resume(args.agent)
@@ -270,7 +268,7 @@ def cmd_history(args):
     from vigil.db import VigilDB
     from vigil.compaction import SignalCompactor
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
     compactor = SignalCompactor(db)
 
     history = compactor.get_history(days=args.days, agent=args.agent)
@@ -295,21 +293,48 @@ def cmd_agents(args):
     """List known agents."""
     from vigil.db import VigilDB
 
-    db = VigilDB(get_db_path())
+    db = VigilDB(require_db())
 
+    # Try the agents table first (populated by MCP server)
     agents = db.query_all(
-        "SELECT from_agent, COUNT(*) as signal_count, "
-        "MAX(created_at) as last_seen "
-        "FROM signals GROUP BY from_agent ORDER BY last_seen DESC"
+        "SELECT id, name, type, last_seen, session_count FROM agents ORDER BY last_seen DESC"
     )
 
-    if not agents:
-        print("No agents have emitted signals yet.")
-        return
+    if agents:
+        print(f"Registered agents ({len(agents)}):\n")
+        for a in agents:
+            print(f"  {a['id']:20s}  type={a['type']:8s}  sessions={a['session_count']}  last: {a['last_seen']}")
+    else:
+        # Fallback: derive from signals table
+        from_signals = db.query_all(
+            "SELECT from_agent, COUNT(*) as signal_count, "
+            "MAX(created_at) as last_seen "
+            "FROM signals GROUP BY from_agent ORDER BY last_seen DESC"
+        )
+        if not from_signals:
+            print("No agents have emitted signals yet.")
+            return
+        print(f"Known agents ({len(from_signals)}):\n")
+        for a in from_signals:
+            print(f"  {a['from_agent']:20s}  {a['signal_count']:4d} signals  last: {a['last_seen']}")
 
-    print(f"Known agents ({len(agents)}):\n")
-    for a in agents:
-        print(f"  {a['from_agent']:20s}  {a['signal_count']:4d} signals  last: {a['last_seen']}")
+
+def cmd_compact(args):
+    """Run signal compaction manually."""
+    from vigil.db import VigilDB
+    from vigil.compaction import SignalCompactor
+
+    db = VigilDB(require_db())
+    compactor = SignalCompactor(db)
+
+    stats = compactor.compact(dry_run=args.dry_run)
+
+    prefix = "[DRY RUN] " if args.dry_run else ""
+    print(f"{prefix}Compaction complete:")
+    print(f"  Daily summaries:   {stats['daily_summaries']}")
+    print(f"  Weekly digests:    {stats['weekly_digests']}")
+    print(f"  Monthly snapshots: {stats['monthly_snapshots']}")
+    print(f"  Signals compacted: {stats['signals_compacted']}")
 
 
 def main():
@@ -379,6 +404,10 @@ def main():
     # agents
     subparsers.add_parser("agents", help="List known agents")
 
+    # compact
+    compact_parser = subparsers.add_parser("compact", help="Run signal compaction manually")
+    compact_parser.add_argument("--dry-run", action="store_true", dest="dry_run", help="Show what would be compacted without modifying data")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -401,6 +430,7 @@ def main():
         "resume": cmd_resume,
         "history": cmd_history,
         "agents": cmd_agents,
+        "compact": cmd_compact,
     }
 
     handler = commands.get(args.command)

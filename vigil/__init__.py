@@ -15,7 +15,12 @@ from vigil.daemon import VigilDaemon
 from vigil.db import VigilDB
 from vigil.handoff import HandoffProtocol, Handoff
 from vigil.compaction import SignalCompactor
-from vigil.mcp_server import create_server
+
+# MCP server is optional — only import if mcp package is available
+try:
+    from vigil.mcp_server import create_server
+except ImportError:
+    create_server = None
 
 __all__ = [
     "Signal",

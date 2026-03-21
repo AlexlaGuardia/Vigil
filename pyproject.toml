@@ -13,7 +13,7 @@ authors = [
     { name = "Alex LaGuardia", email = "alex@alexlaguardia.dev" }
 ]
 keywords = ["ai", "agents", "mcp", "awareness", "cognitive", "llm", "tools", "handoff", "compaction"]
-dependencies = ["mcp>=1.0.0"]
+dependencies = []
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -36,7 +36,8 @@ Issues = "https://github.com/AlexlaGuardia/Vigil/issues"
 vigil = "vigil.cli:main"
 
 [project.optional-dependencies]
-server = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
+mcp = ["mcp>=1.0.0"]
+server = ["mcp>=1.0.0", "fastapi>=0.100.0", "uvicorn>=0.20.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "anyio>=4.0"]
 
 [tool.hatch.build.targets.wheel]
