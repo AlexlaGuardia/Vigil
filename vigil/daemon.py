@@ -20,6 +20,7 @@ from vigil.db import VigilDB
 from vigil.signals import SignalBus
 from vigil.frames import FrameDetector
 from vigil.awareness import AwarenessCompiler
+from vigil.compaction import SignalCompactor
 
 log = logging.getLogger("vigil.daemon")
 
@@ -56,6 +57,7 @@ class VigilDaemon:
         self.signals = SignalBus(self.db)
         self.frames = FrameDetector(self.db, default_frame=default_frame)
         self.compiler = AwarenessCompiler(self.db, frame_detector=self.frames)
+        self.compactor = SignalCompactor(self.db)
 
         self.compile_interval = compile_interval
         self.maintenance_interval = maintenance_interval
@@ -103,6 +105,17 @@ class VigilDaemon:
                     deleted = self.db.compress_old_signals(days_old=7)
                     if deleted > 0:
                         log.info(f"Maintenance: compressed {deleted} old signals")
+                    # Run tiered compaction
+                    try:
+                        stats = self.compactor.compact()
+                        if stats["daily_summaries"] or stats["weekly_digests"] or stats["monthly_snapshots"]:
+                            log.info(
+                                f"Compaction: {stats['daily_summaries']} daily, "
+                                f"{stats['weekly_digests']} weekly, "
+                                f"{stats['monthly_snapshots']} monthly"
+                            )
+                    except Exception as e:
+                        log.error(f"Compaction error: {e}")
                     last_maintenance = time.time()
 
             except Exception as e:

@@ -4,15 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vigil-agent"
-version = "0.1.0"
-description = "Cognitive infrastructure for AI agents — awareness daemon, frame-based tool filtering, and signal protocol"
+version = "0.5.0"
+description = "Cognitive infrastructure for AI agents — awareness daemon, frame-based tool filtering, signal protocol, session handoff, and MCP server"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "Alex LaGuardia", email = "alex@alexlaguardia.dev" }
 ]
-keywords = ["ai", "agents", "mcp", "awareness", "cognitive", "llm", "tools"]
+keywords = ["ai", "agents", "mcp", "awareness", "cognitive", "llm", "tools", "handoff", "compaction"]
+dependencies = ["mcp>=1.0.0"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -36,7 +37,7 @@ vigil = "vigil.cli:main"
 
 [project.optional-dependencies]
 server = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "anyio>=4.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["vigil"]

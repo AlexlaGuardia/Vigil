@@ -186,6 +186,132 @@ def cmd_boot(args):
         print(f"Signals:   {signals} in last hour")
 
 
+def cmd_serve(args):
+    """Start the Vigil MCP server."""
+    from vigil.mcp_server import run_stdio, run_sse
+
+    db_path = get_db_path()
+    if not Path(db_path).exists():
+        print(f"No database at {db_path}. Run 'vigil init' first.")
+        sys.exit(1)
+
+    transport = args.transport
+    print(f"Starting Vigil MCP server (transport: {transport})")
+
+    if transport == "sse":
+        print(f"  Host: {args.host}:{args.port}")
+        run_sse(db_path=db_path, host=args.host, port=args.port)
+    else:
+        run_stdio(db_path=db_path)
+
+
+def cmd_handoff(args):
+    """Write a structured session handoff."""
+    from vigil.db import VigilDB
+    from vigil.handoff import HandoffProtocol
+
+    db = VigilDB(get_db_path())
+    proto = HandoffProtocol(db)
+
+    files = [f.strip() for f in args.files.split(",") if f.strip()] if args.files else []
+    decisions = [d.strip() for d in args.decisions.split(",") if d.strip()] if args.decisions else []
+    next_steps = [n.strip() for n in args.next_steps.split(",") if n.strip()] if args.next_steps else []
+
+    handoff = proto.end_session(
+        agent_id=args.agent,
+        summary=args.summary,
+        files_touched=files,
+        decisions=decisions,
+        next_steps=next_steps,
+    )
+    print(f"Handoff #{handoff.id} from {handoff.agent_id}")
+    print(f"  Summary: {handoff.summary}")
+    if next_steps:
+        print(f"  Next: {', '.join(next_steps)}")
+
+
+def cmd_resume(args):
+    """Resume from last handoff."""
+    from vigil.db import VigilDB
+    from vigil.handoff import HandoffProtocol
+
+    db = VigilDB(get_db_path())
+    proto = HandoffProtocol(db)
+
+    context = proto.resume(args.agent)
+
+    last = context.get("last_handoff")
+    if last:
+        print(f"Last handoff from: {last['agent_id']}")
+        print(f"  {last['summary']}")
+        if last.get("next_steps"):
+            steps = last["next_steps"]
+            if isinstance(steps, list):
+                for s in steps[:3]:
+                    print(f"  Next: {s}")
+    else:
+        print("No previous handoffs found.")
+
+    signals = context.get("signals_since_handoff", [])
+    if signals:
+        print(f"\n{len(signals)} signals since last handoff:")
+        for s in signals[:5]:
+            print(f"  [{s['from']}] {s['content'][:80]}")
+
+    pending = context.get("pending_next_steps", [])
+    if pending:
+        print(f"\nPending next steps:")
+        for p in pending[:5]:
+            print(f"  [{p['from']}] {p['step']}")
+
+
+def cmd_history(args):
+    """Browse compacted signal history."""
+    from vigil.db import VigilDB
+    from vigil.compaction import SignalCompactor
+
+    db = VigilDB(get_db_path())
+    compactor = SignalCompactor(db)
+
+    history = compactor.get_history(days=args.days, agent=args.agent)
+
+    if not history:
+        print(f"No compacted history in the last {args.days} days.")
+        return
+
+    print(f"Signal history ({len(history)} entries, last {args.days} days):\n")
+    for entry in history:
+        period = entry["period"].upper()
+        agent = entry["agent_id"]
+        count = entry["signal_count"]
+        start = entry["date_range_start"][:10]
+        end = entry["date_range_end"][:10]
+        print(f"  [{period}] {agent} ({count} signals, {start} → {end})")
+        print(f"    {entry['summary'][:120]}")
+        print()
+
+
+def cmd_agents(args):
+    """List known agents."""
+    from vigil.db import VigilDB
+
+    db = VigilDB(get_db_path())
+
+    agents = db.query_all(
+        "SELECT from_agent, COUNT(*) as signal_count, "
+        "MAX(created_at) as last_seen "
+        "FROM signals GROUP BY from_agent ORDER BY last_seen DESC"
+    )
+
+    if not agents:
+        print("No agents have emitted signals yet.")
+        return
+
+    print(f"Known agents ({len(agents)}):\n")
+    for a in agents:
+        print(f"  {a['from_agent']:20s}  {a['signal_count']:4d} signals  last: {a['last_seen']}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="vigil",
@@ -207,6 +333,12 @@ def main():
 
     daemon_sub.add_parser("status", help="Check daemon status")
 
+    # serve (MCP server)
+    serve_parser = subparsers.add_parser("serve", help="Start the Vigil MCP server")
+    serve_parser.add_argument("--transport", default="stdio", choices=["stdio", "sse"], help="Transport protocol")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="SSE host (default: 127.0.0.1)")
+    serve_parser.add_argument("--port", type=int, default=8300, help="SSE port (default: 8300)")
+
     # signal
     signal_parser = subparsers.add_parser("signal", help="Emit a signal")
     signal_parser.add_argument("agent", help="Agent identifier")
@@ -227,6 +359,26 @@ def main():
     boot_parser = subparsers.add_parser("boot", help="Show compiled hot context")
     boot_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
+    # handoff
+    handoff_parser = subparsers.add_parser("handoff", help="Write a structured session handoff")
+    handoff_parser.add_argument("agent", help="Agent identifier")
+    handoff_parser.add_argument("summary", help="What happened this session")
+    handoff_parser.add_argument("--files", default="", help="Comma-separated files touched")
+    handoff_parser.add_argument("--decisions", default="", help="Comma-separated decisions made")
+    handoff_parser.add_argument("--next-steps", default="", dest="next_steps", help="Comma-separated next steps")
+
+    # resume
+    resume_parser = subparsers.add_parser("resume", help="Resume from last handoff")
+    resume_parser.add_argument("agent", help="Agent identifier resuming work")
+
+    # history
+    history_parser = subparsers.add_parser("history", help="Browse compacted signal history")
+    history_parser.add_argument("--days", type=int, default=30, help="Days to look back (default: 30)")
+    history_parser.add_argument("--agent", default=None, help="Filter by agent")
+
+    # agents
+    subparsers.add_parser("agents", help="List known agents")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -239,11 +391,16 @@ def main():
             "start": cmd_daemon_start,
             "status": cmd_daemon_status,
         }.get(a.daemon_command, lambda _: daemon_parser.print_help())(a),
+        "serve": cmd_serve,
         "signal": cmd_signal,
         "status": cmd_status,
         "frames": cmd_frames,
         "tools": cmd_tools,
         "boot": cmd_boot,
+        "handoff": cmd_handoff,
+        "resume": cmd_resume,
+        "history": cmd_history,
+        "agents": cmd_agents,
     }
 
     handler = commands.get(args.command)

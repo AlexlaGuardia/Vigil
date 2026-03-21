@@ -67,12 +67,53 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at DATETIME
 );
 
+-- Handoffs: structured session-to-session continuity
+CREATE TABLE IF NOT EXISTS handoffs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    files_touched TEXT DEFAULT '[]',
+    decisions TEXT DEFAULT '[]',
+    next_steps TEXT DEFAULT '[]',
+    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    ended_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Compacted summaries: tiered signal retention
+CREATE TABLE IF NOT EXISTS compacted_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    signal_count INTEGER NOT NULL DEFAULT 0,
+    date_range_start DATETIME NOT NULL,
+    date_range_end DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Agents: known agent registry
+CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    type TEXT DEFAULT 'unknown',
+    capabilities TEXT DEFAULT '[]',
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+    session_count INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
 CREATE INDEX IF NOT EXISTS idx_signals_unacked ON signals(acknowledged) WHERE acknowledged = 0;
 CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(signal_type);
 CREATE INDEX IF NOT EXISTS idx_focus_status ON focus(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
+CREATE INDEX IF NOT EXISTS idx_handoffs_agent ON handoffs(agent_id);
+CREATE INDEX IF NOT EXISTS idx_handoffs_ended ON handoffs(ended_at);
+CREATE INDEX IF NOT EXISTS idx_compacted_period ON compacted_summaries(period);
+CREATE INDEX IF NOT EXISTS idx_compacted_agent ON compacted_summaries(agent_id);
+CREATE INDEX IF NOT EXISTS idx_compacted_date_range ON compacted_summaries(date_range_start, date_range_end);
+CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen);
 """
 
 
