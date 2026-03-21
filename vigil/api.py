@@ -35,6 +35,7 @@ from vigil.frames import FrameDetector
 from vigil.awareness import AwarenessCompiler
 from vigil.handoff import HandoffProtocol
 from vigil.compaction import SignalCompactor
+from vigil.triggers import TriggerEngine
 
 
 # ── Request/Response models ───────────────────────────────────────
@@ -70,6 +71,15 @@ class FrameRegisterRequest(BaseModel):
     triggers: List[str] = Field(default_factory=list)
 
 
+class TriggerRegisterRequest(BaseModel):
+    name: str
+    action_type: str  # webhook, signal, focus, log
+    action_config: dict = Field(default_factory=dict)
+    signal_type: Optional[str] = None
+    agent_pattern: str = "*"
+    content_pattern: Optional[str] = None
+
+
 # ── App factory ───────────────────────────────────────────────────
 
 def create_app(
@@ -96,6 +106,7 @@ def create_app(
         "compiler": AwarenessCompiler(db, frame_detector=FrameDetector(db, default_frame=default_frame)),
         "handoff": HandoffProtocol(db),
         "compactor": SignalCompactor(db),
+        "triggers": TriggerEngine(db, SignalBus(db)),
     }
 
     app = FastAPI(
@@ -415,10 +426,38 @@ def create_app(
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
+    @app.get("/triggers", dependencies=[Depends(verify_key)])
+    async def triggers_list(enabled_only: bool = Query(True)):
+        """List registered triggers."""
+        triggers = state["triggers"].list_triggers(enabled_only=enabled_only)
+        return [t.to_dict() for t in triggers]
+
+    @app.post("/triggers", dependencies=[Depends(verify_key)])
+    async def triggers_register(req: TriggerRegisterRequest):
+        """Register a new trigger."""
+        valid_actions = ["webhook", "signal", "focus", "log"]
+        if req.action_type not in valid_actions:
+            raise HTTPException(400, f"Invalid action_type: '{req.action_type}'. Valid: {valid_actions}")
+        t = state["triggers"].register(
+            name=req.name,
+            action_type=req.action_type,
+            action_config=req.action_config,
+            signal_type=req.signal_type,
+            agent_pattern=req.agent_pattern,
+            content_pattern=req.content_pattern,
+        )
+        return t.to_dict()
+
+    @app.delete("/triggers/{name}", dependencies=[Depends(verify_key)])
+    async def triggers_remove(name: str):
+        """Remove a trigger."""
+        state["triggers"].remove(name)
+        return {"name": name, "status": "removed"}
+
     @app.get("/health")
     async def health():
         """Health check — no auth required."""
-        return {"status": "ok", "version": "0.5.0"}
+        return {"status": "ok", "version": "1.0.0"}
 
     return app
 

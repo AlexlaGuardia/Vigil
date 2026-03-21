@@ -21,6 +21,7 @@ from vigil.signals import SignalBus
 from vigil.frames import FrameDetector
 from vigil.awareness import AwarenessCompiler
 from vigil.compaction import SignalCompactor
+from vigil.triggers import TriggerEngine
 
 log = logging.getLogger("vigil.daemon")
 
@@ -58,6 +59,7 @@ class VigilDaemon:
         self.frames = FrameDetector(self.db, default_frame=default_frame)
         self.compiler = AwarenessCompiler(self.db, frame_detector=self.frames)
         self.compactor = SignalCompactor(self.db)
+        self.triggers = TriggerEngine(self.db, self.signals)
 
         self.compile_interval = compile_interval
         self.maintenance_interval = maintenance_interval
@@ -88,6 +90,14 @@ class VigilDaemon:
                     f"focus={len(context.get('focus', []))}, "
                     f"signals={context.get('recent_signals', 0)}"
                 )
+
+                # Evaluate triggers against recent signals
+                try:
+                    fired = self.triggers.evaluate_recent(hours=1)
+                    if fired:
+                        log.info(f"Triggers: {len(fired)} fired")
+                except Exception as e:
+                    log.error(f"Trigger evaluation error: {e}")
 
                 # Write awareness file if configured
                 if self.awareness_file:

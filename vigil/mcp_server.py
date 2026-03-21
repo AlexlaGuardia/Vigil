@@ -29,6 +29,7 @@ from vigil.signals import SignalBus, SignalType
 from vigil.frames import FrameDetector
 from vigil.awareness import AwarenessCompiler
 from vigil.handoff import HandoffProtocol
+from vigil.triggers import TriggerEngine
 
 
 def _fmt(data: Any) -> str:
@@ -89,6 +90,11 @@ def create_server(
         if "handoff" not in _state:
             _state["handoff"] = HandoffProtocol(_get_db())
         return _state["handoff"]
+
+    def _get_triggers() -> TriggerEngine:
+        if "triggers" not in _state:
+            _state["triggers"] = TriggerEngine(_get_db(), _get_bus())
+        return _state["triggers"]
 
     # ── Tools ─────────────────────────────────────────────────────
 
@@ -340,6 +346,59 @@ def create_server(
 
         else:
             return _fmt({"error": f"Unknown action: {action}. Use list or register."})
+
+    @mcp.tool()
+    async def vigil_triggers(
+        action: str = "list",
+        name: str = "",
+        action_type: str = "log",
+        signal_type: str = "",
+        agent_pattern: str = "*",
+        content_pattern: str = "",
+        action_config: str = "{}",
+    ) -> str:
+        """Manage event triggers — pattern-matching rules that fire actions on signals.
+
+        Args:
+            action: "list" (default), "add", or "remove"
+            name: Trigger name (required for add/remove)
+            action_type: One of: webhook, signal, focus, log (for "add")
+            signal_type: Filter to this signal type, empty = all (for "add")
+            agent_pattern: Glob pattern for agent names, * = all (for "add")
+            content_pattern: Regex pattern for signal content (for "add")
+            action_config: JSON string of action config (for "add")
+        """
+        engine = _get_triggers()
+
+        if action == "list":
+            triggers = engine.list_triggers(enabled_only=False)
+            return _fmt([t.to_dict() for t in triggers])
+
+        elif action == "add":
+            if not name:
+                return _fmt({"error": "name is required for 'add' action"})
+            try:
+                config = json.loads(action_config) if action_config else {}
+            except json.JSONDecodeError:
+                return _fmt({"error": f"Invalid action_config JSON: {action_config}"})
+            t = engine.register(
+                name=name,
+                action_type=action_type,
+                action_config=config,
+                signal_type=signal_type or None,
+                agent_pattern=agent_pattern,
+                content_pattern=content_pattern or None,
+            )
+            return _fmt(t.to_dict())
+
+        elif action == "remove":
+            if not name:
+                return _fmt({"error": "name is required for 'remove' action"})
+            engine.remove(name)
+            return _fmt({"name": name, "status": "removed"})
+
+        else:
+            return _fmt({"error": f"Unknown action: {action}. Use list, add, or remove."})
 
     @mcp.tool()
     async def vigil_agents(agent: str = "") -> str:

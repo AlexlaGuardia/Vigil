@@ -102,6 +102,21 @@ CREATE TABLE IF NOT EXISTS agents (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Triggers: pattern-matching rules that fire actions on signals
+CREATE TABLE IF NOT EXISTS triggers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    signal_type TEXT,
+    agent_pattern TEXT DEFAULT '*',
+    content_pattern TEXT,
+    action_type TEXT NOT NULL,
+    action_config TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER DEFAULT 1,
+    fire_count INTEGER DEFAULT 0,
+    last_fired_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
 CREATE INDEX IF NOT EXISTS idx_signals_unacked ON signals(acknowledged) WHERE acknowledged = 0;
@@ -114,6 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_compacted_period ON compacted_summaries(period);
 CREATE INDEX IF NOT EXISTS idx_compacted_agent ON compacted_summaries(agent_id);
 CREATE INDEX IF NOT EXISTS idx_compacted_date_range ON compacted_summaries(date_range_start, date_range_end);
 CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen);
+CREATE INDEX IF NOT EXISTS idx_triggers_enabled ON triggers(enabled);
 """
 
 
