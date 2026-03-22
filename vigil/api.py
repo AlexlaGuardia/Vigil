@@ -36,6 +36,7 @@ from vigil.awareness import AwarenessCompiler
 from vigil.handoff import HandoffProtocol
 from vigil.compaction import SignalCompactor
 from vigil.triggers import TriggerEngine
+from vigil.knowledge import KnowledgeBase
 
 
 # ── Request/Response models ───────────────────────────────────────
@@ -69,6 +70,15 @@ class FrameRegisterRequest(BaseModel):
     frame_id: str
     description: str = ""
     triggers: List[str] = Field(default_factory=list)
+
+
+class KnowledgeSetRequest(BaseModel):
+    key: str
+    value: str
+    category: str = "general"
+    source_agent: Optional[str] = None
+    confidence: float = 1.0
+    metadata: dict = Field(default_factory=dict)
 
 
 class TriggerRegisterRequest(BaseModel):
@@ -107,12 +117,13 @@ def create_app(
         "handoff": HandoffProtocol(db),
         "compactor": SignalCompactor(db),
         "triggers": TriggerEngine(db, SignalBus(db)),
+        "knowledge": KnowledgeBase(db),
     }
 
     app = FastAPI(
         title="Vigil",
         description="Cognitive infrastructure for AI agents",
-        version="0.5.0",
+        version="1.5.0",
     )
 
     # ── Templates & static files ──────────────────────────────
@@ -454,10 +465,70 @@ def create_app(
         state["triggers"].remove(name)
         return {"name": name, "status": "removed"}
 
+    @app.get("/knowledge", dependencies=[Depends(verify_key)])
+    async def knowledge_list(
+        category: str = Query(""),
+        agent: str = Query(""),
+        limit: int = Query(50, ge=1, le=200),
+    ):
+        """List knowledge entries."""
+        kb = state["knowledge"]
+        entries = kb.list(
+            category=category or None,
+            source_agent=agent or None,
+            limit=limit,
+        )
+        return {
+            "entries": [e.to_dict() for e in entries],
+            "total": kb.count(category=category or None),
+        }
+
+    @app.post("/knowledge", dependencies=[Depends(verify_key)])
+    async def knowledge_set(req: KnowledgeSetRequest):
+        """Store or update a knowledge entry."""
+        kb = state["knowledge"]
+        entry = kb.set(
+            key=req.key,
+            value=req.value,
+            category=req.category,
+            source_agent=req.source_agent,
+            confidence=req.confidence,
+            metadata=req.metadata,
+        )
+        return entry.to_dict()
+
+    @app.get("/knowledge/{key}", dependencies=[Depends(verify_key)])
+    async def knowledge_get(key: str):
+        """Get a specific knowledge entry."""
+        kb = state["knowledge"]
+        entry = kb.get(key)
+        if not entry:
+            raise HTTPException(404, f"No knowledge entry with key: {key}")
+        return entry.to_dict()
+
+    @app.delete("/knowledge/{key}", dependencies=[Depends(verify_key)])
+    async def knowledge_delete(key: str):
+        """Delete a knowledge entry."""
+        kb = state["knowledge"]
+        if not kb.delete(key):
+            raise HTTPException(404, f"No knowledge entry with key: {key}")
+        return {"key": key, "status": "deleted"}
+
+    @app.get("/knowledge/search/{query}", dependencies=[Depends(verify_key)])
+    async def knowledge_recall(
+        query: str,
+        category: str = Query(""),
+        limit: int = Query(10, ge=1, le=100),
+    ):
+        """Fuzzy-search knowledge entries."""
+        kb = state["knowledge"]
+        results = kb.recall(query, category=category or None, limit=limit)
+        return [e.to_dict() for e in results]
+
     @app.get("/health")
     async def health():
         """Health check — no auth required."""
-        return {"status": "ok", "version": "1.0.0"}
+        return {"status": "ok", "version": "1.5.0"}
 
     return app
 

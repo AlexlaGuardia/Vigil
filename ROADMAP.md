@@ -72,12 +72,12 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [ ] ProductHunt launch
 
 ### DX Polish
-- [ ] `vigil quickstart` — interactive setup wizard (init + register frames + first signal + daemon start)
-- [ ] `vigil doctor` — diagnose common issues (DB exists? daemon running? signals flowing?)
-- [ ] `vigil export` — dump awareness state + recent handoffs to markdown (for pasting into Claude/GPT)
+- [x] `vigil quickstart` — interactive setup wizard (init + register frames + first signal + daemon start)
+- [x] `vigil doctor` — diagnose common issues (DB exists? daemon running? signals flowing?)
+- [x] `vigil export` — dump awareness state + recent handoffs to markdown (for pasting into Claude/GPT)
 - [ ] `vigil import` — import a Vigil config from another project (frames, triggers)
 - [ ] Better error messages across all CLI commands
-- [ ] `vigil version` command
+- [x] `vigil version` command
 - [ ] Tab completion for bash/zsh
 
 ### Integrations
@@ -90,10 +90,10 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [ ] Example: Vigil + n8n/Zapier (webhook triggers as automation source)
 
 ### Knowledge Base
-- [ ] `knowledge` table: key, value, category, source_agent, confidence, created_at
-- [ ] `vigil know <key> <value>` CLI + MCP tool + REST endpoint
-- [ ] `vigil recall <query>` — fuzzy-match knowledge lookup
-- [ ] Knowledge != signals. Signals are ephemeral. Knowledge persists and accumulates.
+- [x] `knowledge` table: key, value, category, source_agent, confidence, created_at
+- [x] `vigil know <key> <value>` CLI + MCP tool + REST endpoint
+- [x] `vigil recall <query>` — fuzzy-match knowledge lookup
+- [x] Knowledge != signals. Signals are ephemeral. Knowledge persists and accumulates.
 - [ ] Auto-extract: daemon identifies recurring patterns in signals → suggests knowledge entries
 
 ---

@@ -5,7 +5,7 @@ Awareness daemon, frame-based tool filtering, signal protocol,
 session handoff, and signal compaction.
 """
 
-__version__ = "1.0.1"
+__version__ = "1.5.0"
 
 from vigil.signals import Signal, SignalType, SignalBus
 from vigil.frames import Frame, FrameDetector
@@ -16,6 +16,7 @@ from vigil.db import VigilDB
 from vigil.handoff import HandoffProtocol, Handoff
 from vigil.compaction import SignalCompactor
 from vigil.triggers import TriggerEngine, Trigger
+from vigil.knowledge import KnowledgeBase, KnowledgeEntry
 
 # MCP server is optional — only import if mcp package is available
 try:
@@ -40,5 +41,7 @@ __all__ = [
     "SignalCompactor",
     "TriggerEngine",
     "Trigger",
+    "KnowledgeBase",
+    "KnowledgeEntry",
     "create_server",
 ]

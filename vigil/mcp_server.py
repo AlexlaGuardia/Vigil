@@ -30,6 +30,7 @@ from vigil.frames import FrameDetector
 from vigil.awareness import AwarenessCompiler
 from vigil.handoff import HandoffProtocol
 from vigil.triggers import TriggerEngine
+from vigil.knowledge import KnowledgeBase
 
 
 def _fmt(data: Any) -> str:
@@ -95,6 +96,11 @@ def create_server(
         if "triggers" not in _state:
             _state["triggers"] = TriggerEngine(_get_db(), _get_bus())
         return _state["triggers"]
+
+    def _get_knowledge() -> KnowledgeBase:
+        if "knowledge" not in _state:
+            _state["knowledge"] = KnowledgeBase(_get_db())
+        return _state["knowledge"]
 
     # ── Tools ─────────────────────────────────────────────────────
 
@@ -439,6 +445,105 @@ def create_server(
                 "FROM signals GROUP BY from_agent ORDER BY last_seen DESC",
             )
             return _fmt({"agents": agents, "total": len(agents)})
+
+    @mcp.tool()
+    async def vigil_know(
+        key: str,
+        value: str,
+        category: str = "general",
+        agent: str = "",
+        confidence: float = 1.0,
+    ) -> str:
+        """Store or update a knowledge entry.
+
+        Knowledge is persistent — it survives signal compaction and
+        accumulates over time. Use for learned patterns, decisions,
+        and facts that agents should remember long-term.
+
+        Args:
+            key: Unique identifier (e.g. "deploy_branch", "db_engine")
+            value: The knowledge content
+            category: Category for grouping (e.g. "config", "pattern", "decision")
+            agent: Which agent is storing this (optional)
+            confidence: Confidence level 0.0-1.0 (default: 1.0)
+        """
+        kb = _get_knowledge()
+        entry = kb.set(
+            key=key,
+            value=value,
+            category=category,
+            source_agent=agent or None,
+            confidence=confidence,
+        )
+        if agent:
+            _register_agent_if_new(agent, "mcp")
+        return _fmt(entry.to_dict())
+
+    @mcp.tool()
+    async def vigil_recall(
+        query: str,
+        category: str = "",
+        limit: int = 10,
+    ) -> str:
+        """Search knowledge by fuzzy matching on key, value, and category.
+
+        Returns entries ranked by relevance (key matches first).
+
+        Args:
+            query: Search terms (matches against key, value, and category)
+            category: Filter to a specific category (optional)
+            limit: Max results (default: 10)
+        """
+        kb = _get_knowledge()
+        results = kb.recall(query, category=category or None, limit=limit)
+        return _fmt([e.to_dict() for e in results])
+
+    @mcp.tool()
+    async def vigil_knowledge(
+        action: str = "list",
+        key: str = "",
+        category: str = "",
+        limit: int = 50,
+    ) -> str:
+        """Manage the knowledge base.
+
+        Args:
+            action: "list" (default), "get", "delete", or "categories"
+            key: Knowledge key (required for "get" and "delete")
+            category: Filter by category (for "list")
+            limit: Max entries to return (for "list", default: 50)
+        """
+        kb = _get_knowledge()
+
+        if action == "list":
+            entries = kb.list(category=category or None, limit=limit)
+            return _fmt({
+                "entries": [e.to_dict() for e in entries],
+                "total": kb.count(category=category or None),
+            })
+
+        elif action == "get":
+            if not key:
+                return _fmt({"error": "key is required for 'get' action"})
+            entry = kb.get(key)
+            if not entry:
+                return _fmt({"error": f"No knowledge entry with key: {key}"})
+            return _fmt(entry.to_dict())
+
+        elif action == "delete":
+            if not key:
+                return _fmt({"error": "key is required for 'delete' action"})
+            deleted = kb.delete(key)
+            if not deleted:
+                return _fmt({"error": f"No knowledge entry with key: {key}"})
+            return _fmt({"key": key, "status": "deleted"})
+
+        elif action == "categories":
+            cats = kb.categories()
+            return _fmt({"categories": cats, "total": len(cats)})
+
+        else:
+            return _fmt({"error": f"Unknown action: {action}. Use list, get, delete, or categories."})
 
     # ── Helpers ───────────────────────────────────────────────────
 

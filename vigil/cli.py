@@ -3,12 +3,20 @@ Vigil CLI — Command-line interface for managing the daemon and signals.
 
 Usage:
     vigil init                    Initialize a new Vigil project
+    vigil quickstart              Interactive setup wizard
     vigil daemon start            Start the awareness daemon
     vigil daemon status           Check daemon status
     vigil signal <agent> <msg>    Emit a signal
     vigil status                  Show current awareness
     vigil frames                  List registered frames
     vigil tools [--frame X]       List tools (optionally filtered)
+    vigil know <key> <value>      Store a knowledge entry
+    vigil recall <query>          Fuzzy-search knowledge
+    vigil knowledge               List all knowledge entries
+    vigil forget <key>            Delete a knowledge entry
+    vigil export                  Export state to markdown
+    vigil doctor                  Diagnose common issues
+    vigil version                 Show version
 """
 
 import argparse
@@ -324,6 +332,338 @@ def cmd_agents(args):
             print(f"  {a['from_agent']:20s}  {a['signal_count']:4d} signals  last: {a['last_seen']}")
 
 
+def cmd_know(args):
+    """Store a knowledge entry."""
+    from vigil.db import VigilDB
+    from vigil.knowledge import KnowledgeBase
+
+    db = VigilDB(require_db())
+    kb = KnowledgeBase(db)
+
+    entry = kb.set(
+        key=args.key,
+        value=args.value,
+        category=args.category,
+        source_agent=args.agent,
+        confidence=args.confidence,
+    )
+    print(f"Stored: {entry.key} = {entry.value}")
+    if entry.category != "general":
+        print(f"  Category: {entry.category}")
+
+
+def cmd_recall(args):
+    """Fuzzy-search knowledge."""
+    from vigil.db import VigilDB
+    from vigil.knowledge import KnowledgeBase
+
+    db = VigilDB(require_db())
+    kb = KnowledgeBase(db)
+
+    results = kb.recall(args.query, category=args.category, limit=args.limit)
+
+    if not results:
+        print(f"No knowledge matches '{args.query}'.")
+        return
+
+    print(f"Knowledge ({len(results)} matches):\n")
+    for e in results:
+        agent_str = f" [{e.source_agent}]" if e.source_agent else ""
+        cat_str = f" ({e.category})" if e.category != "general" else ""
+        print(f"  {e.key}{cat_str}{agent_str}")
+        print(f"    {e.value}")
+        print()
+
+
+def cmd_knowledge_list(args):
+    """List all knowledge entries."""
+    from vigil.db import VigilDB
+    from vigil.knowledge import KnowledgeBase
+
+    db = VigilDB(require_db())
+    kb = KnowledgeBase(db)
+
+    entries = kb.list(category=args.category, limit=args.limit)
+
+    if not entries:
+        print("No knowledge stored yet. Use 'vigil know <key> <value>' to add entries.")
+        return
+
+    # Group by category
+    categories = {}
+    for e in entries:
+        cat = e.category or "general"
+        if cat not in categories:
+            categories[cat] = []
+        categories[cat].append(e)
+
+    total = kb.count()
+    print(f"Knowledge ({total} entries):\n")
+    for cat, items in sorted(categories.items()):
+        print(f"  [{cat}]")
+        for e in items:
+            agent_str = f" ({e.source_agent})" if e.source_agent else ""
+            print(f"    {e.key} = {e.value[:80]}{agent_str}")
+        print()
+
+
+def cmd_forget(args):
+    """Delete a knowledge entry."""
+    from vigil.db import VigilDB
+    from vigil.knowledge import KnowledgeBase
+
+    db = VigilDB(require_db())
+    kb = KnowledgeBase(db)
+
+    if kb.delete(args.key):
+        print(f"Forgot: {args.key}")
+    else:
+        print(f"No knowledge entry found with key: {args.key}")
+
+
+def cmd_version(args):
+    """Show Vigil version."""
+    from vigil import __version__
+    print(f"vigil {__version__}")
+
+
+def cmd_doctor(args):
+    """Diagnose common issues."""
+    from vigil import __version__
+    from datetime import datetime, timezone
+
+    checks = []
+
+    # 1. DB exists
+    db_path = get_db_path()
+    db_exists = Path(db_path).exists()
+    checks.append(("Database", "ok" if db_exists else "missing", db_path))
+
+    if not db_exists:
+        for label, status, detail in checks:
+            mark = "+" if status == "ok" else "x"
+            print(f"  [{mark}] {label}: {detail}")
+        print(f"\nRun 'vigil init' to get started.")
+        return
+
+    from vigil.db import VigilDB
+    db = VigilDB(db_path)
+
+    # 2. Daemon compiled recently
+    state = db.get_brain_state()
+    if state and state.get("compiled_at"):
+        compiled = state["compiled_at"]
+        checks.append(("Daemon", "ok", f"last compiled {compiled}"))
+    else:
+        checks.append(("Daemon", "warn", "never compiled — run 'vigil daemon start'"))
+
+    # 3. Signals flowing
+    recent = db.get_recent_signals(hours=24, limit=1)
+    signal_count = db.query_one("SELECT COUNT(*) as cnt FROM signals")
+    total = signal_count["cnt"] if signal_count else 0
+    if recent:
+        checks.append(("Signals", "ok", f"{total} total, active in last 24h"))
+    elif total > 0:
+        checks.append(("Signals", "warn", f"{total} total, none in last 24h"))
+    else:
+        checks.append(("Signals", "warn", "no signals yet — try 'vigil signal agent \"hello\"'"))
+
+    # 4. Frames registered
+    frames = db.get_frames()
+    checks.append(("Frames", "ok" if frames else "warn",
+                    f"{len(frames)} registered" if frames else "none — register frames for filtering"))
+
+    # 5. Focus items
+    focus = db.get_active_focus()
+    checks.append(("Focus", "ok" if focus else "info", f"{len(focus)} active items"))
+
+    # 6. Optional deps
+    deps = []
+    try:
+        import mcp
+        deps.append("mcp")
+    except ImportError:
+        pass
+    try:
+        import fastapi
+        deps.append("fastapi")
+    except ImportError:
+        pass
+    try:
+        import uvicorn
+        deps.append("uvicorn")
+    except ImportError:
+        pass
+
+    if deps:
+        checks.append(("Dependencies", "ok", ", ".join(deps)))
+    else:
+        checks.append(("Dependencies", "info", "core only — install vigil-agent[server] for MCP/REST"))
+
+    # Print results
+    print(f"Vigil v{__version__} — Doctor\n")
+    for label, status, detail in checks:
+        if status == "ok":
+            mark = "+"
+        elif status == "warn":
+            mark = "!"
+        else:
+            mark = "-"
+        print(f"  [{mark}] {label}: {detail}")
+
+    warnings = sum(1 for _, s, _ in checks if s == "warn")
+    if warnings:
+        print(f"\n{warnings} warning(s) found.")
+    else:
+        print(f"\nAll checks passed.")
+
+
+def cmd_quickstart(args):
+    """Interactive setup wizard for new Vigil projects."""
+    from vigil.db import VigilDB
+    from vigil.signals import SignalBus
+    from vigil import __version__
+
+    print(f"Vigil v{__version__} — Quickstart\n")
+
+    # Step 1: Init
+    db_path = get_db_path()
+    if Path(db_path).exists():
+        print(f"[1/4] Database already exists at {db_path}")
+    else:
+        db = VigilDB(db_path)
+        db.register_frame("default", "Default frame — all tools visible", [])
+        print(f"[1/4] Initialized database at {db_path}")
+
+    db = VigilDB(db_path)
+
+    # Step 2: Register example frames
+    existing_frames = db.get_frames()
+    existing_ids = {f["id"] for f in existing_frames}
+
+    example_frames = [
+        ("backend", "Backend development — APIs, databases, infrastructure", ["api", "db", "deploy"]),
+        ("frontend", "Frontend development — UI, components, styling", ["ui", "component", "css"]),
+        ("devops", "DevOps — CI/CD, monitoring, infrastructure", ["deploy", "ci", "monitor"]),
+    ]
+
+    added = 0
+    for fid, desc, triggers in example_frames:
+        if fid not in existing_ids:
+            db.register_frame(fid, desc, triggers)
+            added += 1
+
+    if added:
+        print(f"[2/4] Registered {added} example frames (backend, frontend, devops)")
+    else:
+        print(f"[2/4] Frames already configured ({len(existing_frames)} registered)")
+
+    # Step 3: Emit a test signal
+    bus = SignalBus(db)
+    sig = bus.emit(
+        from_agent="quickstart",
+        content="Vigil quickstart completed — system initialized",
+        signal_type="observation",
+    )
+    print(f"[3/4] Emitted test signal #{sig.id}")
+
+    # Step 4: Next steps
+    print(f"[4/4] Setup complete!\n")
+    print("Next steps:")
+    print(f"  vigil daemon start          # Start awareness daemon (runs in foreground)")
+    print(f"  vigil signal myagent 'msg'  # Emit signals from your agents")
+    print(f"  vigil status                # Check compiled awareness")
+    print(f"  vigil serve --transport sse # Start MCP server (needs: pip install vigil-agent[mcp])")
+    print(f"  vigil doctor                # Verify everything is working")
+    print()
+    print("Add to your AI tool config:")
+    print('  {"mcpServers": {"vigil": {"command": "vigil", "args": ["serve"]}}}')
+
+
+def cmd_export(args):
+    """Export awareness state to markdown for pasting into LLM context."""
+    from vigil.db import VigilDB
+    from vigil.awareness import AwarenessCompiler
+    from vigil import __version__
+    import json as json_mod
+
+    db = VigilDB(require_db())
+
+    lines = []
+    lines.append(f"# Vigil Context Export (v{__version__})")
+    lines.append("")
+
+    # Awareness
+    awareness = db.get_awareness()
+    if awareness and awareness.get("summary"):
+        lines.append("## Awareness")
+        lines.append(awareness["summary"])
+        lines.append(f"_Updated: {awareness.get('updated_at', 'unknown')}_")
+        lines.append("")
+
+    # Frame
+    state = db.get_brain_state()
+    if state:
+        lines.append(f"## Frame: {state.get('current_frame', 'unknown')}")
+        lines.append(f"_Compiled: {state.get('compiled_at', 'never')}_")
+        lines.append("")
+
+    # Focus
+    focus = db.get_active_focus(limit=10)
+    if focus:
+        lines.append("## Active Focus")
+        for f in focus:
+            lines.append(f"- [P{f['priority']}] {f['description']}" +
+                        (f" ({f['owner']})" if f.get('owner') else ""))
+        lines.append("")
+
+    # Recent signals
+    signals = db.get_recent_signals(hours=args.hours, limit=20)
+    if signals:
+        lines.append(f"## Recent Signals (last {args.hours}h)")
+        for s in signals:
+            lines.append(f"- [{s['from_agent']}/{s['signal_type']}] {s['content'][:120]}")
+        lines.append("")
+
+    # Last handoff
+    handoff = db.query_one(
+        "SELECT agent_id, summary, files_touched, decisions, next_steps, ended_at "
+        "FROM handoffs ORDER BY ended_at DESC LIMIT 1"
+    )
+    if handoff:
+        lines.append("## Last Handoff")
+        lines.append(f"**Agent:** {handoff['agent_id']}  ")
+        lines.append(f"**When:** {handoff['ended_at']}  ")
+        lines.append(f"**Summary:** {handoff['summary']}")
+        next_steps = handoff.get("next_steps", "[]")
+        if isinstance(next_steps, str):
+            try:
+                next_steps = json_mod.loads(next_steps)
+            except (json_mod.JSONDecodeError, TypeError):
+                next_steps = []
+        if next_steps:
+            lines.append("**Next steps:**")
+            for step in next_steps:
+                lines.append(f"- {step}")
+        lines.append("")
+
+    # Frames
+    frames = db.get_frames()
+    if frames:
+        lines.append("## Frames")
+        for fr in frames:
+            lines.append(f"- **{fr['id']}**: {fr.get('description', '')}")
+        lines.append("")
+
+    output = "\n".join(lines)
+
+    if args.output:
+        Path(args.output).write_text(output)
+        print(f"Exported to {args.output} ({len(lines)} lines)")
+    else:
+        print(output)
+
+
 def cmd_compact(args):
     """Run signal compaction manually."""
     from vigil.db import VigilDB
@@ -413,6 +753,43 @@ def main():
     compact_parser = subparsers.add_parser("compact", help="Run signal compaction manually")
     compact_parser.add_argument("--dry-run", action="store_true", dest="dry_run", help="Show what would be compacted without modifying data")
 
+    # version
+    subparsers.add_parser("version", help="Show Vigil version")
+
+    # doctor
+    subparsers.add_parser("doctor", help="Diagnose common issues")
+
+    # know
+    know_parser = subparsers.add_parser("know", help="Store a knowledge entry")
+    know_parser.add_argument("key", help="Knowledge key")
+    know_parser.add_argument("value", help="Knowledge value")
+    know_parser.add_argument("--category", default="general", help="Category (default: general)")
+    know_parser.add_argument("--agent", default=None, help="Source agent")
+    know_parser.add_argument("--confidence", type=float, default=1.0, help="Confidence 0.0-1.0 (default: 1.0)")
+
+    # recall
+    recall_parser = subparsers.add_parser("recall", help="Fuzzy-search knowledge")
+    recall_parser.add_argument("query", help="Search query")
+    recall_parser.add_argument("--category", default=None, help="Filter by category")
+    recall_parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
+
+    # knowledge (list)
+    knowledge_parser = subparsers.add_parser("knowledge", help="List all knowledge entries")
+    knowledge_parser.add_argument("--category", default=None, help="Filter by category")
+    knowledge_parser.add_argument("--limit", type=int, default=50, help="Max entries (default: 50)")
+
+    # forget
+    forget_parser = subparsers.add_parser("forget", help="Delete a knowledge entry")
+    forget_parser.add_argument("key", help="Knowledge key to delete")
+
+    # quickstart
+    subparsers.add_parser("quickstart", help="Interactive setup wizard")
+
+    # export
+    export_parser = subparsers.add_parser("export", help="Export awareness state to markdown")
+    export_parser.add_argument("--output", "-o", default=None, help="Write to file instead of stdout")
+    export_parser.add_argument("--hours", type=int, default=24, help="Hours of signal history to include (default: 24)")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -436,6 +813,14 @@ def main():
         "history": cmd_history,
         "agents": cmd_agents,
         "compact": cmd_compact,
+        "version": cmd_version,
+        "doctor": cmd_doctor,
+        "know": cmd_know,
+        "recall": cmd_recall,
+        "knowledge": cmd_knowledge_list,
+        "forget": cmd_forget,
+        "quickstart": cmd_quickstart,
+        "export": cmd_export,
     }
 
     handler = commands.get(args.command)
