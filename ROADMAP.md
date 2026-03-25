@@ -61,14 +61,18 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 > Goal: Get Vigil into the hands of 1,000 developers. Distribution + DX polish.
 
 ### Launch Campaign
-- [ ] HN "Show HN" relaunch (post already written, needs v1.0 update)
-- [ ] Dev.to article: "Give Your AI Agents a Nervous System" (update for v1.0)
-- [ ] Dev.to article: "How I Built a Full Product in One Night with Parallel AI Agents"
+- [x] HN "Show HN" post updated for v1.5 (submit Thu 8-10am ET)
+- [x] Dev.to article: "I Built a Nervous System for AI Agents (Not Another Memory Store)" — published 2026-03-25
+- [x] Dev.to article: "How I Built a Full Product in One Night with 3 Parallel AI Agents" — published 2026-03-25
+- [x] Registry configs: smithery.yaml + glama.json committed (auto-indexing)
+- [x] Cover image generated and committed
+- [x] Portfolio site: Vigil project card (v1.5 stats)
+- [x] v1.5.0 published to PyPI
+- [ ] HN "Show HN" — submit Thu morning
+- [ ] LinkedIn launch post — draft ready
+- [ ] MCP registry: mcp.so (needs browser submission)
+- [ ] awesome-mcp-servers PRs (appcypher 5.2K stars, wong2 3.7K stars)
 - [ ] Reddit: r/LocalLLaMA, r/ClaudeAI, r/MachineLearning
-- [ ] MCP registry listings: mcp.so, Glama.ai, Smithery
-- [ ] awesome-mcp-servers PR
-- [ ] Portfolio site: vigil page with demo GIF
-- [ ] LinkedIn launch post
 - [ ] ProductHunt launch
 
 ### DX Polish
