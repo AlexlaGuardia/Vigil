@@ -3,7 +3,7 @@ title: "I Built a Nervous System for AI Agents (Not Another Memory Store)"
 published: false
 description: "Why your AI agents need awareness, not just memory — and how frame-based tool filtering, session handoff, and an MCP server changed everything."
 tags: ai, python, mcp, opensource
-cover_image:
+cover_image: https://raw.githubusercontent.com/AlexlaGuardia/Vigil/main/cover.png
 ---
 
 ## The Problem Nobody Talks About
