@@ -1,7 +1,7 @@
 ---
 title: "I Built a Nervous System for AI Agents (Not Another Memory Store)"
 published: false
-description: "Why your AI agents need awareness, not just memory — and how frame-based tool filtering saved me 50K+ tokens per session."
+description: "Why your AI agents need awareness, not just memory — and how frame-based tool filtering, session handoff, and an MCP server changed everything."
 tags: ai, python, mcp, opensource
 cover_image:
 ---
@@ -12,11 +12,11 @@ Everyone's building AI agents. Nobody's building the infrastructure to keep them
 
 I've been running ~95 MCP tools across multiple AI agents for the past year — a coding assistant, a trading system, a creative writing setup. Three problems kept hitting me:
 
-**1. Cold starts.** Every new session starts from zero. "Remind me what we were working on" is the most common first message. The agent has no idea what happened 5 minutes ago in a different session.
+**1. Cold starts.** Every new session starts from zero. The agent has no idea what happened 5 minutes ago in a different session.
 
-**2. Token bloat.** Loading 95 tool definitions into context burns ~50,000 tokens before the agent does a single useful thing. That's real money and real context window wasted on tools the agent won't use in this session.
+**2. Token bloat.** Loading 95 tool definitions into context burns ~50,000 tokens before the agent does a single useful thing. That's real money and real context window wasted on tools the agent won't use.
 
-**3. No coordination.** I have multiple agents working on different parts of the same system. They can't hand off work or share awareness without me copy-pasting context between them.
+**3. No coordination.** Multiple agents working on the same system can't hand off work or share awareness without me copy-pasting context between them.
 
 The existing tools (Mem0, Letta, LangGraph) solve pieces of this. Mem0 does memory retrieval. Letta does stateful agents. LangGraph does workflow state. But none of them give agents **awareness** — a continuously-compiled understanding of what's happening right now.
 
@@ -28,11 +28,11 @@ Your nervous system doesn't wait for you to query it. It continuously processes 
 
 That's what I built.
 
-## Vigil: Three Ideas That Changed Everything
+## Vigil: The Six Ideas
 
 ### 1. The Awareness Daemon
 
-A background process runs every 90 seconds, reading recent signals from agents and compiling them into "hot context" — a structured JSON blob that any agent can boot from instantly.
+A background process runs every 90 seconds, reading signals from agents and compiling them into "hot context" — a structured snapshot any agent can boot from instantly.
 
 ```python
 from vigil import VigilDaemon
@@ -42,12 +42,12 @@ daemon = VigilDaemon(
     compile_interval=90,
     awareness_file="AWARENESS.md",
 )
-daemon.start()  # Background thread
+daemon.start()
 ```
 
-When an agent starts a new session, it doesn't cold-start. It calls `compiler.boot()` and gets full context in <1 second: what frame it's in, what's being worked on, what signals came in recently, what the priority queue looks like.
+When an agent starts a session, it calls `compiler.boot()` and gets full context in under a second: active frame, current work, recent signals, priority queue. No startup latency.
 
-The daemon also writes an `AWARENESS.md` file — human-readable, version-controllable awareness state. My agents and I read the same file.
+The daemon also writes an `AWARENESS.md` file — human-readable, version-controllable. My agents and I read the same file.
 
 ### 2. Frame-Based Tool Filtering
 
@@ -71,17 +71,12 @@ async def write_chapter(args):
 async def health(args):
     ...
 
-# The magic
 tool_count()              # 3 (all tools)
 tool_count("backend")     # 2 (deploy + health)
 tool_count("creative")    # 2 (write_chapter + health)
 ```
 
-An agent in "backend" mode never sees creative writing tools. An agent in "creative" mode never sees deployment tools. The `core` frame tag makes tools visible everywhere.
-
-In my setup, this took tool definitions from 95 (all) down to 14-25 per session depending on context. That's a **75-85% reduction** in tool-definition tokens. The LLM also makes better tool choices because it has fewer irrelevant options.
-
-The daemon auto-detects the active frame from recent signals using keyword matching. If agents are talking about "api" and "database," you're in backend mode. If they're talking about "story" and "character," you're in creative mode.
+An agent in "backend" mode never sees creative writing tools. In my setup, this took tool definitions from 95 down to 14-25 per session — a **75-85% reduction** in tool-definition tokens. The LLM also makes better tool choices with fewer irrelevant options.
 
 ### 3. Signal Protocol
 
@@ -104,64 +99,132 @@ bus.emit("backend-agent", "Deployed auth service v2. Tests passing.")
 bus.emit("frontend-agent", "Dashboard layout refactored for mobile.")
 ```
 
-Content budgets prevent runaway data. An observation can't be more than 400 characters. If it's longer, it gets truncated at the nearest sentence boundary. This keeps the signal-to-noise ratio high.
+Content budgets prevent runaway data. The daemon reads these signals, synthesizes them into the awareness summary, and moves on. Agents don't talk to each other — they emit into the bus and the daemon handles the rest.
 
-The daemon reads these signals, synthesizes them into the awareness summary, acknowledges them, and moves on. Agents don't talk to each other directly — they emit signals into the bus and the daemon handles synthesis.
+### 4. Session Handoff
 
-## Architecture
+This is what makes multi-session work actually work. Agents end sessions with structured summaries:
 
+```python
+from vigil import HandoffProtocol
+
+proto = HandoffProtocol(db)
+
+proto.end_session(
+    agent_id="backend-agent",
+    summary="Shipped auth v2 with JWT tokens",
+    files_touched=["auth.py", "middleware.py"],
+    decisions=["Switched from session cookies to JWT"],
+    next_steps=["Add rate limiting", "Write integration tests"],
+)
+
+# Next morning, different agent resumes
+context = proto.resume("morning-agent")
+# Includes: last handoff, signals since, pending next steps
 ```
-Agents emit signals → SQLite → Daemon compiles → Hot context → Agents boot instantly
-                                    ↓
-                            Frame detection
-                            Awareness synthesis
-                            Focus queue
+
+Handoff chains track continuity across sessions. The resume context tells the next agent exactly what happened, what decisions were made, and what to do next. No more "remind me what we were working on."
+
+### 5. Signal Compaction
+
+Signals accumulate. Without compaction, your awareness context grows forever. Vigil uses tiered retention:
+
+- **Raw signals** — kept for 7 days
+- **Daily summaries** — synthesized from raw, kept for 30 days
+- **Weekly digests** — synthesized from daily, kept for 90 days
+- **Monthly snapshots** — permanent archive
+
+```bash
+vigil compact --dry-run  # Preview what would be compacted
+vigil compact            # Run it
 ```
 
-The entire thing runs on SQLite. No Redis, no Postgres, no Docker, no infrastructure. `pip install vigil-agent` and you have a working cognitive layer.
+History stays manageable without losing important context.
+
+### 6. Event Triggers
+
+Pattern-match on signals and fire actions automatically:
+
+```python
+from vigil import TriggerManager
+
+triggers = TriggerManager(db)
+
+triggers.create(
+    name="alert-to-slack",
+    signal_type="alert",
+    agent_pattern="*",
+    action_type="webhook",
+    action_config={"url": "https://hooks.slack.com/..."},
+)
+```
+
+"If any agent emits an alert, post to Slack." "If the backend agent goes silent for 2 hours, create a focus item." Triggers turn Vigil from a passive awareness layer into an active coordination system.
+
+## MCP Server: The Distribution Play
+
+Everything above is available as an MCP server:
+
+```bash
+vigil serve                          # stdio (Claude Code, Claude Desktop)
+vigil serve --transport sse          # SSE (remote clients)
+vigil serve --transport http         # REST API + dashboard
+```
+
+12 MCP tools: boot, compile, signal, status, signals, handoff, resume, chain, stale, focus, frames, agents.
+
+Any MCP-compatible client (Claude Code, Cursor, Windsurf, Claude Desktop) connects and gets persistent awareness. The agent boots with context, emits signals during work, and hands off when done. Next session picks up where it left off.
+
+## The Numbers
+
+| Metric | Value |
+|--------|-------|
+| Modules | 14 |
+| Lines of code | 7,100+ |
+| Tests | 252 |
+| MCP tools | 12 |
+| REST endpoints | 20 |
+| Dashboard pages | 5 |
+| Dependencies | 0 (stdlib only, MCP is optional) |
+| Infrastructure | SQLite (zero setup) |
 
 ## Why Not [Existing Tool]?
 
 | | Vigil | Mem0 | Letta | LangGraph |
 |---|---|---|---|---|
-| Approach | Awareness daemon | Memory retrieval | Stateful runtime | State machine |
-| Context | Pre-compiled, instant | Query on demand | LLM-managed | Checkpoint-based |
-| Tool filtering | Frame-based | None | None | None |
-| Multi-agent | Signal protocol | Shared memory | Single agent | Graph edges |
-| Infra | SQLite | API + LLM costs | Full runtime | LangChain ecosystem |
+| **Approach** | Awareness daemon | Memory retrieval | Stateful runtime | State machine |
+| **Context** | Pre-compiled, instant | Query on demand | LLM-managed | Checkpoint-based |
+| **Tool filtering** | Frame-based (75-85% savings) | None | None | None |
+| **Multi-agent** | Signal protocol + handoff | Shared memory | Single agent | Graph edges |
+| **Compaction** | Tiered retention | None | LLM-managed | None |
+| **MCP native** | Built-in server | No | No | No |
+| **Infrastructure** | SQLite | API + LLM costs | Full runtime | LangChain ecosystem |
 
-These aren't competitors — they're complementary. Vigil handles awareness and coordination. Mem0 handles deep memory. Use both if you want.
+These aren't competitors — they're complementary. Vigil handles awareness and coordination. Mem0 handles deep memory. Use both.
 
-## Quick Start
+## Get Started
 
 ```bash
 pip install vigil-agent
+
 vigil init
 vigil signal my-agent "Starting work on the auth system"
 vigil daemon start
+vigil status
 ```
 
-Or in Python:
+Or as an MCP server:
 
-```python
-from vigil import VigilDB, SignalBus, AwarenessCompiler
-
-db = VigilDB("vigil.db")
-bus = SignalBus(db)
-compiler = AwarenessCompiler(db)
-
-bus.emit("agent", "Deployed new API endpoint")
-compiler.synthesize()
-context = compiler.compile()
-
-# Next session, any agent can boot with:
-hot_context = compiler.boot()  # <1 second, full awareness
+```bash
+pip install "vigil-agent[mcp]"
+vigil serve
 ```
 
-48 tests. MIT license. Zero dependencies beyond Python stdlib.
+252 tests. MIT license. Zero external dependencies.
 
 **GitHub:** [github.com/AlexlaGuardia/Vigil](https://github.com/AlexlaGuardia/Vigil)
+**PyPI:** [pypi.org/project/vigil-agent](https://pypi.org/project/vigil-agent/)
 
 ---
 
-*This is v0.1.0. The roadmap includes session handoff protocol, conversation compaction, and a hosted dashboard for teams. If you're building multi-agent systems and fighting the same problems, I'd love to hear how you're solving them.*
+*This is v1.5.0. The roadmap includes a hosted multi-tenant platform, federation protocol for cross-org agent coordination, and eventually a hardware device (Pi-based always-on awareness hub). If you're building multi-agent systems and fighting the same problems, I'd love to hear how you're solving them.*
