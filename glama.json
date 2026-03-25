@@ -1,0 +1,24 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "name": "vigil-agent",
+  "display_name": "Vigil — Cognitive Infrastructure for AI Agents",
+  "description": "Awareness daemon, frame-based tool filtering, signal protocol, session handoff, and event triggers for AI agents. The nervous system, not just memory.",
+  "repository": {
+    "url": "https://github.com/AlexlaGuardia/Vigil",
+    "source": "github"
+  },
+  "version_detail": {
+    "version": "1.5.0"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Alex LaGuardia"
+  },
+  "tags": ["ai-agents", "awareness", "mcp", "cognitive", "signals", "handoff", "frames", "daemon", "multi-agent"],
+  "features": {
+    "tools": true,
+    "resources": false,
+    "prompts": false
+  },
+  "relatedMcpServers": []
+}
