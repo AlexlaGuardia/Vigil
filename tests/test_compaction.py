@@ -136,8 +136,9 @@ class TestDailyCompaction:
 
 class TestWeeklyCompaction:
     def test_merges_daily_into_weekly(self, compactor, db):
+        # Use same days_ago to guarantee both land in the same ISO week
         _insert_summary(db, "daily", "agent1", "Monday work", 5, 10, 10)
-        _insert_summary(db, "daily", "agent1", "Tuesday work", 3, 9, 9)
+        _insert_summary(db, "daily", "agent1", "Tuesday work", 3, 10, 10)
 
         stats = compactor.compact()
         assert stats["weekly_digests"] == 1
