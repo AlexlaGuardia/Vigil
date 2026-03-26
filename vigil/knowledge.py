@@ -216,3 +216,188 @@ class KnowledgeBase:
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
         )
+
+
+# --- Auto-extraction ---
+
+# Common English stop words + short tokens to ignore
+_STOP_WORDS = frozenset(
+    "a an the is are was were be been being have has had do does did "
+    "will would shall should may might can could must need dare ought "
+    "i me my we us our you your he him his she her it its they them their "
+    "this that these those what which who whom how when where why "
+    "and or but nor not no so if then else for from by at to in on of "
+    "with as into about between through during before after above below "
+    "up down out off over under again further once here there all each "
+    "every both few more most other some such only own same than too very "
+    "just also now still already yet even much many well back also got "
+    "get set run new old let use try one two make way".split()
+)
+
+
+class KnowledgeExtractor:
+    """Analyzes signal patterns and suggests knowledge entries.
+
+    Runs during the daemon's maintenance cycle. Looks for:
+    1. Recurring phrases in signals (3+ occurrences)
+    2. Agent activity patterns (consistent behaviors)
+    3. Key terms that appear across multiple agents
+
+    Stores suggestions with confidence=0.5 and category='auto-extracted'.
+    Never overwrites existing knowledge entries.
+    """
+
+    MIN_OCCURRENCES = 3  # Phrase must appear this many times
+    MIN_PHRASE_LEN = 2   # Minimum words in a phrase
+    MAX_PHRASE_LEN = 4   # Maximum words in a phrase
+    EXTRACT_CONFIDENCE = 0.5
+
+    def __init__(self, db: "VigilDB", kb: Optional["KnowledgeBase"] = None):
+        self.db = db
+        self.kb = kb or KnowledgeBase(db)
+
+    def extract(self, days: int = 7, dry_run: bool = False) -> List[Dict[str, Any]]:
+        """Analyze recent signals and extract knowledge suggestions.
+
+        Args:
+            days: How many days of signals to analyze
+            dry_run: If True, return suggestions without storing them
+
+        Returns:
+            List of extracted knowledge entries (dicts with key, value, reason)
+        """
+        # Get recent signals
+        signals = self.db.query_all(
+            "SELECT from_agent, content, signal_type, created_at "
+            "FROM signals WHERE created_at > datetime('now', ?)"
+            " ORDER BY created_at DESC",
+            (f"-{days} days",),
+        )
+
+        if len(signals) < self.MIN_OCCURRENCES:
+            return []
+
+        suggestions = []
+
+        # Strategy 1: Recurring phrases across signals
+        suggestions.extend(self._extract_recurring_phrases(signals))
+
+        # Strategy 2: Agent activity patterns
+        suggestions.extend(self._extract_agent_patterns(signals))
+
+        # Filter out existing knowledge
+        suggestions = self._filter_existing(suggestions)
+
+        # Store if not dry run
+        if not dry_run:
+            for s in suggestions:
+                self.kb.set(
+                    key=s["key"],
+                    value=s["value"],
+                    category="auto-extracted",
+                    source_agent="vigil-daemon",
+                    confidence=self.EXTRACT_CONFIDENCE,
+                    metadata={"reason": s["reason"], "occurrences": s.get("occurrences", 0)},
+                )
+
+        return suggestions
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Split text into lowercase tokens, removing punctuation and stop words."""
+        # Remove common punctuation, keep alphanumeric and hyphens
+        cleaned = ""
+        for ch in text.lower():
+            if ch.isalnum() or ch in " -_":
+                cleaned += ch
+            else:
+                cleaned += " "
+        tokens = [t for t in cleaned.split() if t and t not in _STOP_WORDS and len(t) > 2]
+        return tokens
+
+    def _extract_ngrams(self, tokens: List[str]) -> List[str]:
+        """Extract n-grams from a token list."""
+        ngrams = []
+        for n in range(self.MIN_PHRASE_LEN, self.MAX_PHRASE_LEN + 1):
+            for i in range(len(tokens) - n + 1):
+                ngram = " ".join(tokens[i:i + n])
+                ngrams.append(ngram)
+        return ngrams
+
+    def _extract_recurring_phrases(self, signals: List[Dict]) -> List[Dict]:
+        """Find phrases that recur across multiple signals."""
+        from collections import Counter
+
+        phrase_counts: Counter = Counter()
+        phrase_agents: Dict[str, set] = {}
+
+        for sig in signals:
+            tokens = self._tokenize(sig["content"])
+            ngrams = self._extract_ngrams(tokens)
+            # Dedupe within a single signal
+            seen = set()
+            for ng in ngrams:
+                if ng not in seen:
+                    phrase_counts[ng] += 1
+                    if ng not in phrase_agents:
+                        phrase_agents[ng] = set()
+                    phrase_agents[ng].add(sig["from_agent"])
+                    seen.add(ng)
+
+        suggestions = []
+        for phrase, count in phrase_counts.most_common(20):
+            if count < self.MIN_OCCURRENCES:
+                break
+            agents = phrase_agents.get(phrase, set())
+            agent_str = ", ".join(sorted(agents))
+
+            suggestions.append({
+                "key": f"pattern:{phrase.replace(' ', '-')}",
+                "value": f"Recurring pattern: '{phrase}' appeared {count} times in signals from {agent_str}",
+                "reason": f"Appeared in {count} signals across {len(agents)} agent(s)",
+                "occurrences": count,
+            })
+
+        return suggestions[:10]  # Cap at 10 per cycle
+
+    def _extract_agent_patterns(self, signals: List[Dict]) -> List[Dict]:
+        """Identify consistent agent behaviors."""
+        from collections import Counter, defaultdict
+
+        agent_types: Dict[str, Counter] = defaultdict(Counter)
+        agent_counts: Counter = Counter()
+
+        for sig in signals:
+            agent = sig["from_agent"]
+            agent_counts[agent] += 1
+            agent_types[agent][sig["signal_type"]] += 1
+
+        suggestions = []
+        for agent, count in agent_counts.most_common(10):
+            if count < 5:
+                continue
+            # Find dominant signal type
+            type_counts = agent_types[agent]
+            dominant_type = type_counts.most_common(1)[0]
+            dominant_pct = dominant_type[1] / count * 100
+
+            if dominant_pct > 70:
+                suggestions.append({
+                    "key": f"agent-pattern:{agent}",
+                    "value": (
+                        f"Agent '{agent}' has emitted {count} signals, "
+                        f"{dominant_pct:.0f}% are {dominant_type[0]} type"
+                    ),
+                    "reason": f"Consistent {dominant_type[0]} behavior from {agent} ({count} signals)",
+                    "occurrences": count,
+                })
+
+        return suggestions[:5]  # Cap at 5 per cycle
+
+    def _filter_existing(self, suggestions: List[Dict]) -> List[Dict]:
+        """Remove suggestions that duplicate existing knowledge."""
+        filtered = []
+        for s in suggestions:
+            existing = self.kb.get(s["key"])
+            if not existing:
+                filtered.append(s)
+        return filtered

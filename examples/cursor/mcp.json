@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "vigil": {
+      "command": "vigil",
+      "args": ["serve"],
+      "env": {
+        "VIGIL_DB": "vigil.db"
+      }
+    }
+  }
+}

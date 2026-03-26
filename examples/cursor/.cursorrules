@@ -1,0 +1,13 @@
+## Vigil Integration
+
+This project uses Vigil for cross-session awareness.
+
+At session start:
+- Call vigil_boot to load awareness context from previous sessions
+
+During work:
+- Call vigil_signal after significant changes (new features, bug fixes, refactors)
+- Keep signals concise — under 400 characters
+
+At session end:
+- Call vigil_handoff with summary, files touched, decisions made, and next steps

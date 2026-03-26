@@ -206,11 +206,35 @@ Agents emit signals → SQLite → Daemon compiles → Hot context → Agents bo
 - **Framework-agnostic** — Works with any MCP-compatible client, or standalone
 - **Lightweight** — Pure Python, no heavy dependencies (mcp is optional)
 
+## Integrations
+
+Ready-to-use configs for popular AI tools. See the [`examples/`](examples/) directory for full setup guides.
+
+| Tool | Setup |
+|------|-------|
+| **Claude Code** | `claude mcp add vigil -- vigil serve` ([guide](examples/claude-code/)) |
+| **Claude Desktop** | Add to `claude_desktop_config.json` ([guide](examples/claude-desktop/)) |
+| **Cursor** | Add to `.cursor/mcp.json` ([guide](examples/cursor/)) |
+| **GitHub Actions** | Emit signals from CI/CD ([workflow](examples/github-actions/)) |
+| **Slack** | Route alerts to Slack via triggers ([guide](examples/slack-webhook/)) |
+| **Discord** | Route alerts to Discord via triggers ([guide](examples/discord-webhook/)) |
+
+### Shell Completion
+
+```bash
+# Bash
+source completions/vigil.bash
+
+# Zsh
+cp completions/vigil.zsh ~/.zsh/completions/_vigil
+```
+
 ## CLI Reference
 
 | Command | Description |
 |---------|-------------|
 | `vigil init` | Initialize a new project |
+| `vigil quickstart` | Interactive setup wizard |
 | `vigil daemon start` | Start the awareness daemon |
 | `vigil daemon status` | Check daemon compilation status |
 | `vigil serve` | Start as MCP server (stdio or SSE) |
@@ -224,6 +248,14 @@ Agents emit signals → SQLite → Daemon compiles → Hot context → Agents bo
 | `vigil history` | Browse compacted signal history |
 | `vigil agents` | List known agents |
 | `vigil compact` | Run signal compaction manually |
+| `vigil know <key> <value>` | Store a knowledge entry |
+| `vigil recall <query>` | Fuzzy-search knowledge |
+| `vigil knowledge` | List all knowledge entries |
+| `vigil forget <key>` | Delete a knowledge entry |
+| `vigil extract` | Auto-extract knowledge from signal patterns |
+| `vigil export` | Export state to markdown |
+| `vigil doctor` | Diagnose common issues |
+| `vigil version` | Show version |
 
 ## Why Not Just Use Mem0/Letta/LangGraph?
 

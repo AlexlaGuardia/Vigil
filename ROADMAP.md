@@ -82,15 +82,15 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [ ] `vigil import` — import a Vigil config from another project (frames, triggers)
 - [ ] Better error messages across all CLI commands
 - [x] `vigil version` command
-- [ ] Tab completion for bash/zsh
+- [x] Tab completion for bash/zsh
 
 ### Integrations
-- [ ] Claude Code hook: auto-emit signals on tool calls (CLAUDE.md example)
-- [ ] GitHub Actions integration: emit signals from CI (deploy success/fail → triggers)
-- [ ] Slack webhook template: alert triggers → Slack channel
-- [ ] Discord webhook template
-- [ ] Example: Vigil + Cursor (`.cursor/mcp.json` config)
-- [ ] Example: Vigil + Claude Desktop
+- [x] Claude Code hook: auto-emit signals on tool calls (CLAUDE.md example)
+- [x] GitHub Actions integration: emit signals from CI (deploy success/fail → triggers)
+- [x] Slack webhook template: alert triggers → Slack channel
+- [x] Discord webhook template
+- [x] Example: Vigil + Cursor (`.cursor/mcp.json` config)
+- [x] Example: Vigil + Claude Desktop
 - [ ] Example: Vigil + n8n/Zapier (webhook triggers as automation source)
 
 ### Knowledge Base
@@ -98,7 +98,7 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [x] `vigil know <key> <value>` CLI + MCP tool + REST endpoint
 - [x] `vigil recall <query>` — fuzzy-match knowledge lookup
 - [x] Knowledge != signals. Signals are ephemeral. Knowledge persists and accumulates.
-- [ ] Auto-extract: daemon identifies recurring patterns in signals → suggests knowledge entries
+- [x] Auto-extract: daemon identifies recurring patterns in signals → suggests knowledge entries
 
 ---
 
@@ -260,5 +260,5 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 | Active Vigil instances | 1 (ours) | 50 | 500 |
 | Paying customers | 0 | 0 | 30 |
 | MRR | $0 | $0 | $1,500 |
-| Tests | 196 | 250 | 400 |
-| Lines of code | 5,922 | 8,000 | 15,000 |
+| Tests | 268 | 300 | 400 |
+| Lines of code | 7,500+ | 8,000 | 15,000 |

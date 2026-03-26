@@ -14,6 +14,7 @@ Usage:
     vigil recall <query>          Fuzzy-search knowledge
     vigil knowledge               List all knowledge entries
     vigil forget <key>            Delete a knowledge entry
+    vigil extract                  Auto-extract knowledge from signals
     vigil export                  Export state to markdown
     vigil doctor                  Diagnose common issues
     vigil version                 Show version
@@ -518,6 +519,35 @@ def cmd_doctor(args):
         print(f"\nAll checks passed.")
 
 
+def cmd_extract(args):
+    """Run knowledge auto-extraction on recent signals."""
+    from vigil.db import VigilDB
+    from vigil.knowledge import KnowledgeBase, KnowledgeExtractor
+
+    db = VigilDB(require_db())
+    kb = KnowledgeBase(db)
+    extractor = KnowledgeExtractor(db, kb)
+
+    suggestions = extractor.extract(days=args.days, dry_run=args.dry_run)
+
+    prefix = "[DRY RUN] " if args.dry_run else ""
+
+    if not suggestions:
+        print(f"{prefix}No patterns found in the last {args.days} days of signals.")
+        return
+
+    print(f"{prefix}Extracted {len(suggestions)} knowledge entries:\n")
+    for s in suggestions:
+        print(f"  {s['key']}")
+        print(f"    {s['value']}")
+        print(f"    Reason: {s['reason']}")
+        print()
+
+    if not args.dry_run:
+        print(f"Stored {len(suggestions)} entries with confidence={KnowledgeExtractor.EXTRACT_CONFIDENCE}")
+        print("Review with: vigil knowledge --category auto-extracted")
+
+
 def cmd_quickstart(args):
     """Interactive setup wizard for new Vigil projects."""
     from vigil.db import VigilDB
@@ -782,6 +812,11 @@ def main():
     forget_parser = subparsers.add_parser("forget", help="Delete a knowledge entry")
     forget_parser.add_argument("key", help="Knowledge key to delete")
 
+    # extract
+    extract_parser = subparsers.add_parser("extract", help="Auto-extract knowledge from signal patterns")
+    extract_parser.add_argument("--days", type=int, default=7, help="Days of signals to analyze (default: 7)")
+    extract_parser.add_argument("--dry-run", action="store_true", dest="dry_run", help="Show suggestions without storing them")
+
     # quickstart
     subparsers.add_parser("quickstart", help="Interactive setup wizard")
 
@@ -820,6 +855,7 @@ def main():
         "knowledge": cmd_knowledge_list,
         "forget": cmd_forget,
         "quickstart": cmd_quickstart,
+        "extract": cmd_extract,
         "export": cmd_export,
     }
 

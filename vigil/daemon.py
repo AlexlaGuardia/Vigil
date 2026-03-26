@@ -22,6 +22,7 @@ from vigil.frames import FrameDetector
 from vigil.awareness import AwarenessCompiler
 from vigil.compaction import SignalCompactor
 from vigil.triggers import TriggerEngine
+from vigil.knowledge import KnowledgeBase, KnowledgeExtractor
 
 log = logging.getLogger("vigil.daemon")
 
@@ -60,6 +61,8 @@ class VigilDaemon:
         self.compiler = AwarenessCompiler(self.db, frame_detector=self.frames)
         self.compactor = SignalCompactor(self.db)
         self.triggers = TriggerEngine(self.db, self.signals)
+        self.knowledge = KnowledgeBase(self.db)
+        self.extractor = KnowledgeExtractor(self.db, self.knowledge)
 
         self.compile_interval = compile_interval
         self.maintenance_interval = maintenance_interval
@@ -126,6 +129,13 @@ class VigilDaemon:
                             )
                     except Exception as e:
                         log.error(f"Compaction error: {e}")
+                    # Knowledge auto-extraction
+                    try:
+                        extracted = self.extractor.extract(days=7)
+                        if extracted:
+                            log.info(f"Knowledge: auto-extracted {len(extracted)} entries")
+                    except Exception as e:
+                        log.error(f"Knowledge extraction error: {e}")
                     last_maintenance = time.time()
 
             except Exception as e:

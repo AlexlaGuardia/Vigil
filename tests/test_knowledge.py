@@ -4,7 +4,7 @@ import os
 import tempfile
 import pytest
 from vigil.db import VigilDB
-from vigil.knowledge import KnowledgeBase, KnowledgeEntry
+from vigil.knowledge import KnowledgeBase, KnowledgeEntry, KnowledgeExtractor
 
 
 @pytest.fixture
@@ -251,3 +251,181 @@ class TestKnowledgeBaseSchemaIdempotent:
         kb1.set("test", "value")
         entry = kb2.get("test")
         assert entry.value == "value"
+
+
+# --- KnowledgeExtractor tests ---
+
+@pytest.fixture
+def extractor(db, kb):
+    return KnowledgeExtractor(db, kb)
+
+
+def _emit_signals(db, agent, messages):
+    """Helper to emit multiple signals."""
+    for msg in messages:
+        db.create_signal(from_agent=agent, content=msg, signal_type="observation")
+
+
+class TestKnowledgeExtractorTokenize:
+    def test_basic_tokenize(self, extractor):
+        tokens = extractor._tokenize("Deployed auth service v2 to production")
+        assert "deployed" in tokens
+        assert "auth" in tokens
+        assert "service" in tokens
+        assert "production" in tokens
+        # Stop words removed
+        assert "to" not in tokens
+
+    def test_removes_short_tokens(self, extractor):
+        tokens = extractor._tokenize("a b cd xyz")
+        assert "a" not in tokens
+        assert "b" not in tokens
+        assert "cd" not in tokens
+        assert "xyz" in tokens
+
+    def test_handles_punctuation(self, extractor):
+        tokens = extractor._tokenize("error: database connection failed!")
+        assert "error" in tokens
+        assert "database" in tokens
+        assert "connection" in tokens
+        assert "failed" in tokens
+
+
+class TestKnowledgeExtractorNgrams:
+    def test_basic_ngrams(self, extractor):
+        tokens = ["deployed", "auth", "service", "production"]
+        ngrams = extractor._extract_ngrams(tokens)
+        assert "deployed auth" in ngrams
+        assert "auth service" in ngrams
+        assert "deployed auth service" in ngrams
+
+    def test_empty_tokens(self, extractor):
+        assert extractor._extract_ngrams([]) == []
+
+    def test_single_token(self, extractor):
+        # MIN_PHRASE_LEN is 2, so single token produces no ngrams
+        assert extractor._extract_ngrams(["hello"]) == []
+
+
+class TestKnowledgeExtractorRecurringPhrases:
+    def test_finds_recurring_phrase(self, db, extractor):
+        # Same phrase in 4 signals → should be extracted
+        for _ in range(4):
+            db.create_signal(
+                from_agent="backend",
+                content="Deployed auth service to production",
+                signal_type="observation",
+            )
+        suggestions = extractor._extract_recurring_phrases(
+            db.query_all("SELECT from_agent, content, signal_type, created_at FROM signals")
+        )
+        # Should find at least one recurring phrase
+        assert len(suggestions) > 0
+        assert any("auth-service" in s["key"] or "deployed-auth" in s["key"] for s in suggestions)
+
+    def test_no_recurring_phrases(self, db, extractor):
+        # All unique signals
+        db.create_signal(from_agent="a", content="first unique message here", signal_type="observation")
+        db.create_signal(from_agent="b", content="second different content now", signal_type="observation")
+        suggestions = extractor._extract_recurring_phrases(
+            db.query_all("SELECT from_agent, content, signal_type, created_at FROM signals")
+        )
+        assert suggestions == []
+
+
+class TestKnowledgeExtractorAgentPatterns:
+    def test_finds_dominant_type(self, db, extractor):
+        # Agent with 80% observation signals
+        for _ in range(8):
+            db.create_signal(from_agent="monitor", content="All systems normal", signal_type="observation")
+        for _ in range(2):
+            db.create_signal(from_agent="monitor", content="Something happened", signal_type="alert")
+
+        suggestions = extractor._extract_agent_patterns(
+            db.query_all("SELECT from_agent, content, signal_type, created_at FROM signals")
+        )
+        assert len(suggestions) > 0
+        assert any("monitor" in s["key"] for s in suggestions)
+
+    def test_skips_low_count_agents(self, db, extractor):
+        # Only 2 signals — below threshold
+        db.create_signal(from_agent="rare", content="msg1", signal_type="observation")
+        db.create_signal(from_agent="rare", content="msg2", signal_type="observation")
+
+        suggestions = extractor._extract_agent_patterns(
+            db.query_all("SELECT from_agent, content, signal_type, created_at FROM signals")
+        )
+        assert suggestions == []
+
+    def test_skips_mixed_type_agents(self, db, extractor):
+        # Agent with evenly mixed types (no dominant)
+        for i in range(5):
+            db.create_signal(from_agent="mixed", content=f"obs {i}", signal_type="observation")
+        for i in range(5):
+            db.create_signal(from_agent="mixed", content=f"alert {i}", signal_type="alert")
+
+        suggestions = extractor._extract_agent_patterns(
+            db.query_all("SELECT from_agent, content, signal_type, created_at FROM signals")
+        )
+        # 50% observation, 50% alert — neither >70%, should be empty
+        assert suggestions == []
+
+
+class TestKnowledgeExtractorExtract:
+    def test_full_extraction_dry_run(self, db, extractor):
+        for _ in range(5):
+            db.create_signal(
+                from_agent="deployer",
+                content="Deployed backend service to staging environment",
+                signal_type="observation",
+            )
+        suggestions = extractor.extract(days=7, dry_run=True)
+        assert len(suggestions) > 0
+        # Dry run should NOT store anything
+        assert extractor.kb.count() == 0
+
+    def test_full_extraction_stores(self, db, extractor):
+        for _ in range(5):
+            db.create_signal(
+                from_agent="deployer",
+                content="Deployed backend service to staging environment",
+                signal_type="observation",
+            )
+        suggestions = extractor.extract(days=7, dry_run=False)
+        assert len(suggestions) > 0
+        # Should be stored now
+        assert extractor.kb.count() > 0
+        # All stored with auto-extracted category
+        entries = extractor.kb.list(category="auto-extracted")
+        assert len(entries) > 0
+
+    def test_no_signals_no_extraction(self, db, extractor):
+        suggestions = extractor.extract(days=7)
+        assert suggestions == []
+
+    def test_filters_existing_knowledge(self, db, extractor, kb):
+        for _ in range(5):
+            db.create_signal(
+                from_agent="test",
+                content="Deployed backend service to staging environment",
+                signal_type="observation",
+            )
+        # First extraction
+        first = extractor.extract(days=7, dry_run=False)
+        assert len(first) > 0
+
+        # Second extraction — should find nothing new (already stored)
+        second = extractor.extract(days=7, dry_run=True)
+        assert len(second) == 0
+
+    def test_extraction_confidence(self, db, extractor):
+        for _ in range(5):
+            db.create_signal(
+                from_agent="bot",
+                content="Running daily health check on production servers",
+                signal_type="observation",
+            )
+        extractor.extract(days=7)
+        entries = extractor.kb.list(category="auto-extracted")
+        for e in entries:
+            assert e.confidence == KnowledgeExtractor.EXTRACT_CONFIDENCE

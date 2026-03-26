@@ -1,0 +1,80 @@
+# .github/workflows/vigil-signal.yml
+#
+# Emit Vigil signals from GitHub Actions.
+# Requires a running Vigil server with HTTP transport.
+#
+# Setup:
+#   1. Start Vigil: vigil serve --transport http --host 0.0.0.0 --port 8300
+#   2. Add VIGIL_URL and VIGIL_TOKEN to your repo secrets
+#   3. Copy this workflow to .github/workflows/
+
+name: Vigil Signals
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, closed, merged]
+  deployment_status:
+
+env:
+  VIGIL_URL: ${{ secrets.VIGIL_URL }}  # e.g., http://your-server:8300
+  VIGIL_TOKEN: ${{ secrets.VIGIL_TOKEN }}
+
+jobs:
+  signal-push:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Signal push to Vigil
+        run: |
+          COMMIT_MSG=$(echo '${{ github.event.head_commit.message }}' | head -1)
+          curl -s -X POST "$VIGIL_URL/signals" \
+            -H "Authorization: Bearer $VIGIL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"from_agent\": \"github-actions\",
+              \"content\": \"Push to ${{ github.ref_name }}: ${COMMIT_MSG}\",
+              \"signal_type\": \"observation\"
+            }"
+
+  signal-deploy:
+    if: github.event_name == 'deployment_status'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Signal deployment to Vigil
+        run: |
+          STATUS="${{ github.event.deployment_status.state }}"
+          ENV="${{ github.event.deployment.environment }}"
+          if [ "$STATUS" = "success" ]; then
+            TYPE="observation"
+            MSG="Deployed to ${ENV} successfully"
+          else
+            TYPE="alert"
+            MSG="Deployment to ${ENV} failed (${STATUS})"
+          fi
+          curl -s -X POST "$VIGIL_URL/signals" \
+            -H "Authorization: Bearer $VIGIL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"from_agent\": \"github-actions\",
+              \"content\": \"${MSG}\",
+              \"signal_type\": \"${TYPE}\"
+            }"
+
+  signal-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Signal PR event to Vigil
+        run: |
+          ACTION="${{ github.event.action }}"
+          TITLE=$(echo '${{ github.event.pull_request.title }}' | head -1)
+          curl -s -X POST "$VIGIL_URL/signals" \
+            -H "Authorization: Bearer $VIGIL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"from_agent\": \"github-actions\",
+              \"content\": \"PR ${ACTION}: ${TITLE} (#${{ github.event.pull_request.number }})\",
+              \"signal_type\": \"observation\"
+            }"
