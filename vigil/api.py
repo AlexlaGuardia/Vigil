@@ -92,24 +92,10 @@ class TriggerRegisterRequest(BaseModel):
 
 # ── App factory ───────────────────────────────────────────────────
 
-def create_app(
-    db_path: str = "vigil.db",
-    default_frame: str = "default",
-    api_key: Optional[str] = None,
-) -> FastAPI:
-    """
-    Create a Vigil REST API application.
-
-    Args:
-        db_path: Path to Vigil SQLite database
-        default_frame: Default frame when no triggers match
-        api_key: API key for auth (None = no auth). Also reads VIGIL_API_KEY env var.
-    """
-    key = api_key or os.environ.get("VIGIL_API_KEY")
-
-    # Eager init — SQLite is lightweight, no cost
+def build_state(db_path: str = "vigil.db", default_frame: str = "default") -> dict:
+    """Build a Vigil state dict from a database path. Reusable by hosted tier."""
     db = VigilDB(db_path)
-    state = {
+    return {
         "db": db,
         "bus": SignalBus(db),
         "frames": FrameDetector(db, default_frame=default_frame),
@@ -119,6 +105,27 @@ def create_app(
         "triggers": TriggerEngine(db, SignalBus(db)),
         "knowledge": KnowledgeBase(db),
     }
+
+
+def create_app(
+    db_path: str = "vigil.db",
+    default_frame: str = "default",
+    api_key: Optional[str] = None,
+    state: Optional[dict] = None,
+) -> FastAPI:
+    """
+    Create a Vigil REST API application.
+
+    Args:
+        db_path: Path to Vigil SQLite database
+        default_frame: Default frame when no triggers match
+        api_key: API key for auth (None = no auth). Also reads VIGIL_API_KEY env var.
+        state: Pre-built state dict (for hosted multi-tenant use). Overrides db_path.
+    """
+    key = api_key or os.environ.get("VIGIL_API_KEY")
+
+    if state is None:
+        state = build_state(db_path, default_frame)
 
     app = FastAPI(
         title="Vigil",
