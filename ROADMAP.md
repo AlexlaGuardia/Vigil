@@ -57,7 +57,7 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 
 ---
 
-## v1.5.0 — "The Adoption Release" (next)
+## v1.5.0 — "The Adoption Release" — SHIPPED (2026-03-28)
 > Goal: Get Vigil into the hands of 1,000 developers. Distribution + DX polish.
 
 ### Launch Campaign
@@ -68,12 +68,13 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [x] Cover image generated and committed
 - [x] Portfolio site: Vigil project card (v1.5 stats)
 - [x] v1.5.0 published to PyPI
-- [ ] HN "Show HN" — submit Thu morning
-- [ ] LinkedIn launch post — draft ready
-- [ ] MCP registry: mcp.so (needs browser submission)
-- [ ] awesome-mcp-servers PRs (appcypher 5.2K stars, wong2 3.7K stars)
-- [ ] Reddit: r/LocalLLaMA, r/ClaudeAI, r/MachineLearning
-- [ ] ProductHunt launch
+- [x] MCP registry: mcp.so — submitted 2026-03-28
+- [x] MCP registry: mcpservers.org — submitted 2026-03-28
+- [x] awesome-mcp-servers PR (appcypher, 5.2K stars) — merged 2026-03-28
+- [x] LinkedIn launch post — posted 2026-03-28
+- [ ] HN "Show HN" — deferred (new account needs karma first)
+- [ ] Reddit: r/LocalLLaMA, r/ClaudeAI — deferred (drafts ready in launch/REDDIT_POSTS.md)
+- [ ] ProductHunt launch — deferred
 
 ### DX Polish
 - [x] `vigil quickstart` — interactive setup wizard (init + register frames + first signal + daemon start)
