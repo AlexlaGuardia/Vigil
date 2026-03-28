@@ -113,11 +113,24 @@ def create_hosted_app() -> FastAPI:
     from hosted.billing import router as billing_router
     app.include_router(billing_router)
 
+    # ── Background daemon ──────────────────────────────────────
+
+    from hosted.daemon import HostedDaemon
+    _daemon = HostedDaemon(get_platform_db(), interval=120, active_window=24)
+
+    @app.on_event("startup")
+    async def startup():
+        _daemon.start()
+
+    @app.on_event("shutdown")
+    async def shutdown():
+        _daemon.stop()
+
     # ── Health (no auth) ─────────────────────────────────────
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.0.0", "hosted": True}
+        return {"status": "ok", "version": "2.0.0", "hosted": True, "daemon": _daemon.stats}
 
     # ── Core endpoints (tenant-scoped) ───────────────────────
 
