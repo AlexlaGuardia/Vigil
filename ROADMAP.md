@@ -106,13 +106,14 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 ## v2.0.0 — "The Platform" (Q3 2026)
 > Goal: Multi-tenant hosted service. The thing that generates revenue.
 
-### Hosted Tier — vigil.cloud (or vigil.alexlaguardia.dev)
+### Hosted Tier — vigil-agent.com
 - [ ] Cloud-hosted Vigil instances (one-click setup)
-- [ ] Solo tier: $19/mo (1 project, 5 agents, 10K signals/mo, dashboard)
-- [ ] Team tier: $49/mo (5 projects, unlimited agents, 100K signals/mo, SSO)
-- [ ] Enterprise tier: $199/mo (unlimited, SLA, priority support, custom frames)
+- [ ] Free tier: 1 project, 2 agents, 5K signals/mo (generous enough to actually use)
+- [ ] Pro tier: $9/mo (1 project, unlimited agents, 50K signals/mo, dashboard)
+- [ ] Team tier: $29/mo (5 projects, unlimited agents, 200K signals/mo, SSO)
+- [ ] Enterprise tier: $99/mo (unlimited, SLA, priority support, custom frames)
 - [ ] Stripe billing integration
-- [ ] Free tier: 1 project, 2 agents, 1K signals/mo (growth funnel)
+- [ ] Domain: vigil-agent.com (matches PyPI package name)
 
 ### Multi-Tenant Architecture
 - [ ] Project isolation: each project gets its own SQLite DB (or Postgres for scale)
@@ -242,13 +243,13 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 | Phase | Timeline | Revenue | Driver |
 |-------|----------|---------|--------|
 | Open Source | Now - Q2 2026 | $0 | GitHub stars, PyPI downloads, content |
-| Early Hosted | Q3 2026 | $500-2K/mo | First paying teams on solo/team tier |
-| Hosted Growth | Q4 2026 | $5-15K/mo | Content marketing + word of mouth |
-| Enterprise | Q1 2027 | $20-50K/mo | Enterprise tier + custom deployments |
+| Early Hosted | Q3 2026 | $300-1K/mo | First paying users on pro/team tier |
+| Hosted Growth | Q4 2026 | $2-8K/mo | Content marketing + word of mouth |
+| Enterprise | Q1 2027 | $10-30K/mo | Enterprise tier + custom deployments |
 | Hardware | Q3 2027 | +$10-30K/mo | Vigil Hub device + subscription |
-| Steady State | 2028 | $100K+/mo | Platform + enterprise + hardware |
+| Steady State | 2028 | $50K+/mo | Platform + enterprise + hardware |
 
-**Break-even for hosted tier:** ~30 solo customers or ~12 team customers.
+**Break-even for hosted tier:** ~50 pro customers or ~15 team customers.
 
 ---
 
