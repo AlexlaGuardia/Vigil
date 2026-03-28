@@ -103,24 +103,29 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 
 ---
 
-## v2.0.0 — "The Platform" (Q3 2026)
+## v2.0.0 — "The Platform" — LIVE (2026-03-28)
 > Goal: Multi-tenant hosted service. The thing that generates revenue.
+> Built and deployed in a single session. 1,295 lines across 12 files in hosted/ package.
 
 ### Hosted Tier — vigil-agent.com
-- [ ] Cloud-hosted Vigil instances (one-click setup)
-- [ ] Free tier: 1 project, 2 agents, 5K signals/mo (generous enough to actually use)
-- [ ] Pro tier: $9/mo (1 project, unlimited agents, 50K signals/mo, dashboard)
-- [ ] Team tier: $29/mo (5 projects, unlimited agents, 200K signals/mo, SSO)
-- [ ] Enterprise tier: $99/mo (unlimited, SLA, priority support, custom frames)
-- [ ] Stripe billing integration
-- [ ] Domain: vigil-agent.com (matches PyPI package name)
+- [x] Cloud-hosted Vigil instances (one-click setup via GitHub OAuth)
+- [x] Free tier: 1 project, 2 agents, 5K signals/mo
+- [x] Pro tier: $9/mo (1 project, unlimited agents, 50K signals/mo, dashboard)
+- [x] Team tier: $29/mo (5 projects, unlimited agents, 200K signals/mo, SSO)
+- [x] Enterprise tier: $99/mo (unlimited, SLA, priority support, custom frames)
+- [x] Stripe billing integration (checkout, portal, webhooks)
+- [x] Domain: vigil-agent.com (landing page) + app.vigil-agent.com (hosted app)
+- [x] Landing page: dark theme, Tailwind, mobile hamburger, favicon, OG tags
+- [x] First production signal recorded
 
 ### Multi-Tenant Architecture
-- [ ] Project isolation: each project gets its own SQLite DB (or Postgres for scale)
+- [x] Project isolation: per-tenant SQLite DB at /data/vigil/tenants/{id}/vigil.db
+- [x] API key management: vgl_ prefix, SHA-256 hashed, prefix-indexed lookup
+- [x] Usage metering: signal count, compile count, per-month tracking
+- [x] Tier enforcement: 110% soft cap, 429 with upgrade message
+- [x] Multi-tenant daemon: background compile cycle (120s), active tenants only
 - [ ] Team invites: email-based, role-based (admin/member/viewer)
-- [ ] API key management: per-project keys with scopes
-- [ ] Usage metering: signal count, agent count, storage, compile cycles
-- [ ] Rate limiting per tier
+- [ ] Rate limiting per tier (beyond signal count)
 - [ ] Audit log: who did what, when (compliance-ready)
 
 ### Policy Engine
@@ -137,7 +142,7 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [ ] Frame switching UI (click to change active frame)
 - [ ] Trigger builder: visual rule editor (no JSON editing)
 - [ ] Alert system: email/Slack/webhook when metrics cross thresholds
-- [ ] Mobile-responsive layout
+- [x] Mobile-responsive layout
 
 ### Pluggable Memory Backends
 - [ ] Mem0 adapter: Vigil coordinates awareness, Mem0 handles deep memory
