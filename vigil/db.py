@@ -117,7 +117,21 @@ CREATE TABLE IF NOT EXISTS triggers (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- MCP Events: tool call monitoring for mcpwatch
+CREATE TABLE IF NOT EXISTS mcp_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_name TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    duration_ms REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'success',
+    error TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_mcp_events_server ON mcp_events(server_name);
+CREATE INDEX IF NOT EXISTS idx_mcp_events_created ON mcp_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_mcp_events_tool ON mcp_events(tool_name);
 CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
 CREATE INDEX IF NOT EXISTS idx_signals_unacked ON signals(acknowledged) WHERE acknowledged = 0;
 CREATE INDEX IF NOT EXISTS idx_signals_type ON signals(signal_type);

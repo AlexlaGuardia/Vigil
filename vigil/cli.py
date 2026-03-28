@@ -694,6 +694,71 @@ def cmd_export(args):
         print(output)
 
 
+def cmd_mcp_health(args):
+    """Show MCP server health — call volume, errors, latency."""
+    from vigil.db import VigilDB
+
+    db = VigilDB(require_db())
+    hours = args.hours
+    server_filter = args.server
+
+    # Get all servers
+    if server_filter:
+        servers = [server_filter]
+    else:
+        rows = db.query_all("SELECT DISTINCT server_name FROM mcp_events ORDER BY server_name")
+        servers = [r["server_name"] for r in rows]
+
+    if not servers:
+        print("No MCP events recorded yet.")
+        print()
+        print("Instrument a server with:")
+        print("  from vigil.mcpwatch import instrument")
+        print("  watch = instrument(your_mcp_server)")
+        return
+
+    for srv in servers:
+        # Overall stats
+        stats = db.query_one(
+            "SELECT COUNT(*) as total_calls, "
+            "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as total_errors, "
+            "AVG(duration_ms) as avg_ms, "
+            "MAX(created_at) as last_seen "
+            "FROM mcp_events WHERE server_name = ? AND created_at > datetime('now', ?)",
+            (srv, f"-{hours} hours"),
+        )
+        total = stats["total_calls"] or 0
+        errors = stats["total_errors"] or 0
+        error_rate = errors / total if total else 0
+
+        if error_rate > 0.5:
+            status_icon = "UNHEALTHY"
+        elif error_rate > 0.1:
+            status_icon = "DEGRADED"
+        else:
+            status_icon = "HEALTHY"
+
+        print(f"  {srv}  [{status_icon}]")
+        print(f"  Calls: {total}  |  Errors: {errors} ({error_rate:.1%})  |  Avg: {(stats['avg_ms'] or 0):.0f}ms")
+        print(f"  Last call: {stats['last_seen'] or 'never'}")
+
+        # Per-tool breakdown
+        tools = db.query_all(
+            "SELECT tool_name, COUNT(*) as calls, "
+            "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errs, "
+            "AVG(duration_ms) as avg_ms, MAX(duration_ms) as max_ms "
+            "FROM mcp_events WHERE server_name = ? AND created_at > datetime('now', ?) "
+            "GROUP BY tool_name ORDER BY calls DESC LIMIT 15",
+            (srv, f"-{hours} hours"),
+        )
+        if tools:
+            print(f"  {'Tool':<30} {'Calls':>6} {'Errors':>7} {'Avg ms':>8} {'Max ms':>8}")
+            print(f"  {'─'*30} {'─'*6} {'─'*7} {'─'*8} {'─'*8}")
+            for t in tools:
+                print(f"  {t['tool_name']:<30} {t['calls']:>6} {t['errs']:>7} {(t['avg_ms'] or 0):>7.0f} {(t['max_ms'] or 0):>7.0f}")
+        print()
+
+
 def cmd_compact(args):
     """Run signal compaction manually."""
     from vigil.db import VigilDB
@@ -825,6 +890,11 @@ def main():
     export_parser.add_argument("--output", "-o", default=None, help="Write to file instead of stdout")
     export_parser.add_argument("--hours", type=int, default=24, help="Hours of signal history to include (default: 24)")
 
+    # mcp-health
+    mcp_health_parser = subparsers.add_parser("mcp-health", help="MCP server health — call volume, errors, latency")
+    mcp_health_parser.add_argument("--server", "-s", default="", help="Filter by server name")
+    mcp_health_parser.add_argument("--hours", type=int, default=24, help="Time window in hours (default: 24)")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -857,6 +927,7 @@ def main():
         "quickstart": cmd_quickstart,
         "extract": cmd_extract,
         "export": cmd_export,
+        "mcp-health": cmd_mcp_health,
     }
 
     handler = commands.get(args.command)

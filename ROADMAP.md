@@ -144,6 +144,23 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [ ] Alert system: email/Slack/webhook when metrics cross thresholds
 - [x] Mobile-responsive layout
 
+### MCP Production Observability (Pro/Team Tier Feature)
+> One-line SDK that turns Vigil into a production monitoring layer for MCP servers.
+> This is the "you need the paid tier" incentive.
+
+- [x] `mcpwatch` SDK: `from vigil.mcpwatch import instrument; instrument(server)` — one-line setup
+- [x] Auto-emit signals on: tool calls, errors, latency spikes, connection drops
+- [x] MCP health dashboard: server uptime, tool call volume, error rates, p95 latency
+- [x] Silent failure detection: alert when tool calls stop (the 60+ failures over 48h scenario)
+- [x] Latency degradation alerts: server responds but slowly (the 500ms for 3 days scenario)
+- [x] Per-tool analytics: which tools are called most, which fail most, which are slowest
+- [x] `vigil mcp-health` CLI command for quick status check
+- [x] REST API: /mcp/health, /mcp/tools, /mcp/errors, /mcp/latency, /mcp/volume endpoints
+- [x] Multi-server view: monitor all your MCP servers from one Vigil dashboard
+- [x] Historical trends: tool usage over time, error rate trends, capacity planning
+- [ ] GitHub Action: `vigil mcp-health-check` in CI — verify MCP server responds before deploy
+- [ ] Slack/webhook alerts when MCP server health degrades
+
 ### Pluggable Memory Backends
 - [ ] Mem0 adapter: Vigil coordinates awareness, Mem0 handles deep memory
 - [ ] Zep adapter: temporal knowledge graph as memory backend

@@ -532,6 +532,172 @@ def create_app(
         results = kb.recall(query, category=category or None, limit=limit)
         return [e.to_dict() for e in results]
 
+    # ── MCP Observability endpoints ─────────────────────────────
+
+    @app.get("/mcp/health", dependencies=[Depends(verify_key)])
+    async def mcp_health(server: str = Query("", description="Filter by server name")):
+        """MCP server health summary — call volume, error rates, latency."""
+        db = state["db"]
+        # Get all monitored servers or filter
+        if server:
+            servers = [server]
+        else:
+            rows = db.query_all(
+                "SELECT DISTINCT server_name FROM mcp_events ORDER BY server_name"
+            )
+            servers = [r["server_name"] for r in rows]
+
+        if not servers:
+            return {"servers": [], "message": "No MCP events recorded yet. Instrument a server with `from vigil.mcpwatch import instrument`."}
+
+        result = []
+        for srv in servers:
+            stats = db.query_one(
+                "SELECT COUNT(*) as total_calls, "
+                "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as total_errors, "
+                "AVG(duration_ms) as avg_ms, "
+                "MAX(duration_ms) as max_ms, "
+                "MIN(created_at) as first_seen, "
+                "MAX(created_at) as last_seen "
+                "FROM mcp_events WHERE server_name = ?",
+                (srv,),
+            )
+            # Get per-tool breakdown
+            tools = db.query_all(
+                "SELECT tool_name, COUNT(*) as calls, "
+                "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errors, "
+                "AVG(duration_ms) as avg_ms, MAX(duration_ms) as max_ms "
+                "FROM mcp_events WHERE server_name = ? "
+                "AND created_at > datetime('now', '-24 hours') "
+                "GROUP BY tool_name ORDER BY calls DESC",
+                (srv,),
+            )
+            total = stats["total_calls"] or 0
+            errors = stats["total_errors"] or 0
+            error_rate = errors / total if total else 0
+
+            result.append({
+                "server": srv,
+                "status": "unhealthy" if error_rate > 0.5 else ("degraded" if error_rate > 0.1 else "healthy"),
+                "total_calls": total,
+                "total_errors": errors,
+                "error_rate": round(error_rate, 4),
+                "avg_ms": round(stats["avg_ms"] or 0, 2),
+                "max_ms": round(stats["max_ms"] or 0, 2),
+                "first_seen": stats["first_seen"],
+                "last_seen": stats["last_seen"],
+                "tools_24h": tools,
+            })
+
+        return {"servers": result}
+
+    @app.get("/mcp/tools", dependencies=[Depends(verify_key)])
+    async def mcp_tools(
+        server: str = Query(""),
+        hours: int = Query(24, ge=1, le=168),
+    ):
+        """Per-tool analytics — call counts, error rates, latency."""
+        db = state["db"]
+        params = [f"-{hours} hours"]
+        query = (
+            "SELECT server_name, tool_name, COUNT(*) as calls, "
+            "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errors, "
+            "AVG(duration_ms) as avg_ms, "
+            "MIN(duration_ms) as min_ms, "
+            "MAX(duration_ms) as max_ms "
+            "FROM mcp_events WHERE created_at > datetime('now', ?) "
+        )
+        if server:
+            query += "AND server_name = ? "
+            params.append(server)
+        query += "GROUP BY server_name, tool_name ORDER BY calls DESC"
+        rows = db.query_all(query, tuple(params))
+
+        for r in rows:
+            r["error_rate"] = round(r["errors"] / r["calls"], 4) if r["calls"] else 0
+            r["avg_ms"] = round(r["avg_ms"] or 0, 2)
+            r["min_ms"] = round(r["min_ms"] or 0, 2)
+            r["max_ms"] = round(r["max_ms"] or 0, 2)
+        return {"tools": rows, "hours": hours}
+
+    @app.get("/mcp/errors", dependencies=[Depends(verify_key)])
+    async def mcp_errors(
+        server: str = Query(""),
+        limit: int = Query(50, ge=1, le=200),
+    ):
+        """Recent MCP tool errors."""
+        db = state["db"]
+        if server:
+            rows = db.query_all(
+                "SELECT server_name, tool_name, duration_ms, error, created_at "
+                "FROM mcp_events WHERE status = 'error' AND server_name = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (server, limit),
+            )
+        else:
+            rows = db.query_all(
+                "SELECT server_name, tool_name, duration_ms, error, created_at "
+                "FROM mcp_events WHERE status = 'error' "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return {"errors": rows, "count": len(rows)}
+
+    @app.get("/mcp/latency", dependencies=[Depends(verify_key)])
+    async def mcp_latency(
+        server: str = Query(""),
+        hours: int = Query(24, ge=1, le=168),
+    ):
+        """Latency percentiles over time."""
+        db = state["db"]
+        params = [f"-{hours} hours"]
+        query = (
+            "SELECT duration_ms FROM mcp_events WHERE created_at > datetime('now', ?) "
+        )
+        if server:
+            query += "AND server_name = ? "
+            params.append(server)
+        query += "ORDER BY duration_ms"
+        rows = db.query_all(query, tuple(params))
+
+        if not rows:
+            return {"p50": 0, "p95": 0, "p99": 0, "count": 0, "hours": hours}
+
+        durations = [r["duration_ms"] for r in rows]
+        n = len(durations)
+        return {
+            "p50": round(durations[int(n * 0.50)], 2),
+            "p95": round(durations[int(n * 0.95)], 2),
+            "p99": round(durations[min(int(n * 0.99), n - 1)], 2),
+            "count": n,
+            "hours": hours,
+        }
+
+    @app.get("/mcp/volume", dependencies=[Depends(verify_key)])
+    async def mcp_volume(
+        server: str = Query(""),
+        hours: int = Query(24, ge=1, le=168),
+    ):
+        """Call volume over time (hourly buckets)."""
+        db = state["db"]
+        params = [f"-{hours} hours"]
+        query = (
+            "SELECT strftime('%Y-%m-%d %H:00', created_at) as bucket, "
+            "COUNT(*) as calls, "
+            "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errors, "
+            "AVG(duration_ms) as avg_ms "
+            "FROM mcp_events WHERE created_at > datetime('now', ?) "
+        )
+        if server:
+            query += "AND server_name = ? "
+            params.append(server)
+        query += "GROUP BY bucket ORDER BY bucket"
+        rows = db.query_all(query, tuple(params))
+
+        for r in rows:
+            r["avg_ms"] = round(r["avg_ms"] or 0, 2)
+        return {"buckets": rows, "hours": hours}
+
     @app.get("/health")
     async def health():
         """Health check — no auth required."""
