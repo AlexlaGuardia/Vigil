@@ -231,10 +231,10 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct):
     keys_html = ""
     for k in keys:
         keys_html += f"""
-        <tr>
-            <td><code>{k['key_prefix']}...</code></td>
+        <tr class="table-row">
+            <td><code class="inline-code">{k['key_prefix']}...</code></td>
             <td>{k['name']}</td>
-            <td>{k.get('last_used_at') or 'Never'}</td>
+            <td class="muted">{k.get('last_used_at') or 'Never'}</td>
             <td>
                 <form method="POST" action="/dashboard/keys/{k['id']}/revoke" style="display:inline">
                     <button type="submit" class="btn-sm btn-danger">Revoke</button>
@@ -244,132 +244,794 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct):
 
     signal_limit_display = f"{limits['signal_limit']:,}" if limits['signal_limit'] > 0 else "Unlimited"
 
-    return HTMLResponse(f"""<!DOCTYPE html>
-<html><head><title>Dashboard — Vigil Cloud</title>
-<style>
-* {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ background: #0d1117; color: #e6edf3; font-family: system-ui; }}
-.nav {{ background: #161b22; border-bottom: 1px solid #30363d; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }}
-.nav h1 {{ font-size: 1.2rem; color: #38bdf8; }}
-.nav-right {{ display: flex; align-items: center; gap: 1rem; }}
-.nav-right img {{ width: 32px; height: 32px; border-radius: 50%; }}
-.nav-right a {{ color: #8b949e; text-decoration: none; font-size: 0.9rem; }}
-.container {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem; }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }}
-.stat-card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; }}
-.stat-card .label {{ color: #8b949e; font-size: 0.85rem; margin-bottom: 0.25rem; }}
-.stat-card .value {{ font-size: 1.5rem; font-weight: 700; color: #38bdf8; }}
-.section {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }}
-.section h2 {{ font-size: 1.1rem; margin-bottom: 1rem; color: #e6edf3; }}
-table {{ width: 100%; border-collapse: collapse; }}
-th, td {{ text-align: left; padding: 0.5rem; border-bottom: 1px solid #30363d; font-size: 0.9rem; }}
-th {{ color: #8b949e; }}
-code {{ background: #0d1117; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem; }}
-.bar-bg {{ background: #30363d; border-radius: 4px; height: 8px; margin-top: 0.5rem; }}
-.bar-fill {{ background: #38bdf8; height: 8px; border-radius: 4px; transition: width 0.3s; }}
-.btn {{ display: inline-block; background: #238636; color: white; padding: 0.5rem 1rem; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.9rem; border: none; cursor: pointer; }}
-.btn:hover {{ background: #2ea043; }}
-.btn-sm {{ padding: 0.25rem 0.5rem; font-size: 0.8rem; border-radius: 4px; border: none; cursor: pointer; color: white; }}
-.btn-danger {{ background: #da3633; }}
-.btn-danger:hover {{ background: #f85149; }}
-.connect {{ background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; font-family: monospace; font-size: 0.85rem; white-space: pre; overflow-x: auto; }}
-.tier-badge {{ display: inline-block; background: #30363d; color: #38bdf8; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }}
-</style></head><body>
-<div class="nav">
-    <h1>vigil <span class="tier-badge">{user['tier']}</span></h1>
-    <div class="nav-right">
-        <span>{user['name']}</span>
-        <img src="{user.get('avatar_url', '')}" alt="">
-        <a href="/auth/logout">Logout</a>
-    </div>
-</div>
-<div class="container">
-    <div class="grid">
-        <div class="stat-card">
-            <div class="label">Signals this month</div>
-            <div class="value">{usage['signal_count']:,}</div>
-            <div class="bar-bg"><div class="bar-fill" style="width: {usage_pct}%"></div></div>
-            <div class="label" style="margin-top:0.25rem">{usage_pct}% of {signal_limit_display}</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Compiles</div>
-            <div class="value">{usage['compile_count']:,}</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Tier</div>
-            <div class="value">{user['tier'].title()}</div>
-        </div>
-        <div class="stat-card">
-            <div class="label">Project</div>
-            <div class="value">{project['name'] if project else 'None'}</div>
-        </div>
-    </div>
+    # Signal type accent colors for activity feed
+    def signal_type_color(stype):
+        colors = {
+            "observation": "#38bdf8",
+            "alert": "#f59e0b",
+            "error": "#f87171",
+            "action": "#4ade80",
+            "warning": "#fb923c",
+        }
+        return colors.get(stype, "#8b949e")
 
+    activity_html = ""
+    if not recent_signals:
+        activity_html = "<p class='muted' style='font-size:0.9rem;padding:0.5rem 0;'>No signals yet. Connect an agent or send a test signal above.</p>"
+    else:
+        for s in recent_signals:
+            stype = s.get('signal_type', 'observation')
+            accent = signal_type_color(stype)
+            activity_html += f"""
+        <div class="activity-entry" style="border-left-color:{accent}">
+            <div class="activity-meta">
+                <span class="activity-agent">{s.get('from_agent','?')}</span>
+                <span class="activity-type" style="color:{accent}">{stype}</span>
+                <span class="activity-time">{str(s.get('created_at',''))[:19]}</span>
+            </div>
+            <div class="activity-content">{s.get('content','')[:120]}</div>
+        </div>"""
+
+    test_signal_html = "" if not has_keys else """
     <div class="section">
-        <h2>Connect Your Agent</h2>
-        <p style="color:#8b949e; margin-bottom:1rem; font-size:0.9rem">{"Create an API key below, then add this to your agent:" if not has_keys else "Add this to your agent's environment or MCP config:"}</p>
-        <div class="connect">VIGIL_API_URL=https://app.vigil-agent.com
-VIGIL_API_KEY={first_key_prefix}
-
-# Send a signal:
-curl -X POST https://app.vigil-agent.com/api/signal \\
-  -H "Authorization: Bearer {first_key_prefix}" \\
-  -H "Content-Type: application/json" \\
-  -d '{{"agent":"my-agent","content":"hello world","signal_type":"observation"}}'
-
-# Boot with awareness:
-curl -H "Authorization: Bearer {first_key_prefix}" \\
-  https://app.vigil-agent.com/api/boot</div>
-    </div>
-
-    {"" if not has_keys else '''<div class="section">
-        <h2>Send Test Signal</h2>
-        <p style="color:#8b949e; margin-bottom:0.75rem; font-size:0.9rem">Verify your setup — send a test signal right now.</p>
-        <form method="POST" action="/dashboard/test-signal" style="display:flex; gap:0.5rem; align-items:center;">
+        <div class="section-header">
+            <h2 class="section-title">Send Test Signal</h2>
+            <div class="section-rule"></div>
+        </div>
+        <p class="section-desc">Verify your setup — send a test signal and watch it appear in the feed.</p>
+        <form method="POST" action="/dashboard/test-signal" class="input-row">
             <input type="text" name="content" placeholder="Test signal content..." value="Hello from Vigil Cloud!"
-                   style="background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:0.5rem; color:#e6edf3; font-size:0.9rem; flex:1;">
-            <button type="submit" class="btn">Send Signal</button>
+                   class="text-input">
+            <button type="submit" class="btn-primary">Send Signal</button>
         </form>
-    </div>'''}
+    </div>"""
 
-    <div class="section">
-        <h2>Recent Activity</h2>
-        {"<p style='color:#8b949e; font-size:0.9rem'>No signals yet. Connect an agent or send a test signal above.</p>" if not recent_signals else ""}
-        {"".join(f"""<div style="border-bottom:1px solid #21262d; padding:0.5rem 0;">
-            <span style="color:#38bdf8; font-size:0.8rem; font-family:monospace;">{s.get('from_agent','?')}</span>
-            <span style="color:#8b949e; font-size:0.75rem; margin-left:0.5rem;">{s.get('signal_type','')}</span>
-            <span style="color:#8b949e; font-size:0.75rem; float:right;">{str(s.get('created_at',''))[:19]}</span>
-            <div style="color:#e6edf3; font-size:0.85rem; margin-top:0.25rem;">{s.get('content','')[:120]}</div>
-        </div>""" for s in recent_signals)}
-    </div>
-
-    <div class="section">
-        <h2>API Keys</h2>
-        <table>
-            <thead><tr><th>Key</th><th>Name</th><th>Last Used</th><th></th></tr></thead>
-            <tbody>{keys_html if keys_html else '<tr><td colspan="4" style="color:#8b949e">No API keys yet</td></tr>'}</tbody>
-        </table>
-        <form method="POST" action="/dashboard/keys/create" style="margin-top:1rem; display:flex; gap:0.5rem; align-items:center;">
-            <input type="text" name="key_name" placeholder="Key name" value="default"
-                   style="background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:0.5rem; color:#e6edf3; font-size:0.9rem;">
-            <button type="submit" class="btn">Create Key</button>
-        </form>
-    </div>
-
-    <div class="section">
-        <h2>Billing</h2>
-        {"" if user['tier'] != 'free' else '''
-        <p style="color:#8b949e; margin-bottom:1rem; font-size:0.9rem">Upgrade for more signals, unlimited agents, and hosted dashboard.</p>
-        <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
-            <form method="POST" action="/billing/checkout/pro"><button type="submit" class="btn">Upgrade to Pro — $9/mo</button></form>
-            <form method="POST" action="/billing/checkout/team"><button type="submit" class="btn" style="background:#6f42c1;">Upgrade to Team — $29/mo</button></form>
-            <form method="POST" action="/billing/checkout/enterprise"><button type="submit" class="btn" style="background:#0969da;">Upgrade to Enterprise — $99/mo</button></form>
+    billing_free_html = """
+    <div class="billing-cards">
+        <div class="billing-card">
+            <p class="billing-tier">Pro</p>
+            <div class="billing-price"><span class="billing-amount">$9</span><span class="billing-period">/ mo</span></div>
+            <ul class="billing-features">
+                <li><span class="check">&#10003;</span> Unlimited agents</li>
+                <li><span class="check">&#10003;</span> 50K signals / mo</li>
+                <li><span class="check">&#10003;</span> Hosted MCP server</li>
+                <li><span class="check">&#10003;</span> Dashboard UI</li>
+            </ul>
+            <form method="POST" action="/billing/checkout/pro">
+                <button type="submit" class="billing-btn billing-btn-accent">Upgrade to Pro</button>
+            </form>
         </div>
-        '''}
-        {"" if user['tier'] == 'free' else '''
-        <p style="color:#8b949e; margin-bottom:1rem; font-size:0.9rem">Manage your subscription, update payment method, or cancel.</p>
-        <form method="POST" action="/billing/portal"><button type="submit" class="btn">Manage Subscription</button></form>
-        '''}
+        <div class="billing-card billing-card-popular">
+            <div class="billing-popular-badge">Most Popular</div>
+            <p class="billing-tier" style="color:#38bdf8">Team</p>
+            <div class="billing-price"><span class="billing-amount">$29</span><span class="billing-period">/ mo</span></div>
+            <ul class="billing-features">
+                <li><span class="check">&#10003;</span> 5 projects</li>
+                <li><span class="check">&#10003;</span> 200K signals / mo</li>
+                <li><span class="check">&#10003;</span> SSO / team access</li>
+                <li><span class="check">&#10003;</span> Priority support</li>
+            </ul>
+            <form method="POST" action="/billing/checkout/team">
+                <button type="submit" class="billing-btn billing-btn-solid">Upgrade to Team</button>
+            </form>
+        </div>
+        <div class="billing-card">
+            <p class="billing-tier">Enterprise</p>
+            <div class="billing-price"><span class="billing-amount">$99</span><span class="billing-period">/ mo</span></div>
+            <ul class="billing-features">
+                <li><span class="check">&#10003;</span> Unlimited projects</li>
+                <li><span class="check">&#10003;</span> Unlimited signals</li>
+                <li><span class="check">&#10003;</span> SLA guarantee</li>
+                <li><span class="check">&#10003;</span> Custom frames</li>
+            </ul>
+            <form method="POST" action="/billing/checkout/enterprise">
+                <button type="submit" class="billing-btn billing-btn-ghost">Upgrade to Enterprise</button>
+            </form>
+        </div>
+    </div>"""
+
+    billing_paid_html = """
+    <p class="section-desc" style="margin-bottom:1.25rem;">Manage your subscription, update payment method, or cancel anytime.</p>
+    <form method="POST" action="/billing/portal">
+        <button type="submit" class="btn-primary">Manage Subscription</button>
+    </form>"""
+
+    billing_html = billing_free_html if user['tier'] == 'free' else billing_paid_html
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="en"><head><title>Dashboard — Vigil Cloud</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+*, *::before, *::after {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+:root {{
+  --surface: #050506;
+  --panel:   #0d0d0e;
+  --card:    #161b22;
+  --border:  #21262d;
+  --border2: #30363d;
+  --accent:  #38bdf8;
+  --accent-dim: #0ea5e9;
+  --accent-glow: rgba(56,189,248,0.12);
+  --muted:   #8b949e;
+  --bright:  #e6edf3;
+}}
+
+html, body {{
+  background: var(--surface);
+  color: var(--bright);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}}
+
+/* ── Nav ─────────────────────────────────── */
+.nav {{
+  background: rgba(13,13,14,0.85);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 0 2rem;
+  height: 60px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}}
+
+.nav-brand {{
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  text-decoration: none;
+}}
+
+.nav-logo-mark {{
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(56,189,248,0.08);
+  border: 1px solid rgba(56,189,248,0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}}
+
+.nav-brand-name {{
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--bright);
+  letter-spacing: -0.01em;
+}}
+
+.tier-badge {{
+  display: inline-block;
+  background: rgba(56,189,248,0.1);
+  color: var(--accent);
+  border: 1px solid rgba(56,189,248,0.25);
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}}
+
+.nav-right {{
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}}
+
+.nav-username {{
+  font-size: 0.875rem;
+  color: var(--muted);
+}}
+
+.nav-avatar {{
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border2);
+}}
+
+.nav-logout {{
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  transition: color 0.15s, border-color 0.15s;
+}}
+
+.nav-logout:hover {{
+  color: var(--bright);
+  border-color: var(--border2);
+}}
+
+/* ── Layout ──────────────────────────────── */
+.container {{
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 4rem;
+}}
+
+/* ── Stats Grid ──────────────────────────── */
+.stats-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}}
+
+.stat-card {{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}}
+
+.stat-card:hover {{
+  border-color: rgba(56,189,248,0.3);
+  box-shadow: 0 0 20px rgba(56,189,248,0.08);
+  transform: translateY(-1px);
+}}
+
+.stat-label {{
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.625rem;
+}}
+
+.stat-value {{
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}}
+
+.bar-bg {{
+  background: var(--border2);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}}
+
+.bar-fill {{
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #38bdf8 0%, #818cf8 100%);
+  transition: width 0.4s ease;
+  position: relative;
+}}
+
+.bar-fill::after {{
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #818cf8;
+  box-shadow: 0 0 6px rgba(129,140,248,0.6);
+}}
+
+.bar-meta {{
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 0.4rem;
+}}
+
+/* ── Section ─────────────────────────────── */
+.section {{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.75rem;
+  margin-bottom: 1.25rem;
+}}
+
+.section-header {{
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}}
+
+.section-title {{
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--bright);
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}}
+
+.section-rule {{
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(56,189,248,0.3) 0%, var(--border) 50%, transparent 100%);
+}}
+
+.section-desc {{
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin-bottom: 1rem;
+  line-height: 1.5;
+}}
+
+/* ── Code Block ──────────────────────────── */
+.code-block {{
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+  color: #c9d1d9;
+}}
+
+.code-block .hl-cyan   {{ color: #38bdf8; }}
+.code-block .hl-green  {{ color: #4ade80; }}
+.code-block .hl-muted  {{ color: #8b949e; }}
+.code-block .hl-yellow {{ color: #fbbf24; }}
+
+/* ── Inline code ─────────────────────────── */
+.inline-code {{
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--accent);
+}}
+
+/* ── Activity Feed ───────────────────────── */
+.activity-entry {{
+  border-left: 2px solid;
+  padding: 0.75rem 0 0.75rem 1rem;
+  margin-bottom: 0.25rem;
+}}
+
+.activity-entry + .activity-entry {{
+  border-top: 1px solid var(--border);
+  padding-top: 0.875rem;
+}}
+
+.activity-meta {{
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}}
+
+.activity-agent {{
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.775rem;
+  font-weight: 500;
+  color: var(--accent);
+}}
+
+.activity-type {{
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.85;
+}}
+
+.activity-time {{
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}}
+
+.activity-content {{
+  font-size: 0.85rem;
+  color: var(--bright);
+  opacity: 0.9;
+}}
+
+/* ── Table ───────────────────────────────── */
+table {{
+  width: 100%;
+  border-collapse: collapse;
+}}
+
+.table-row td, thead th {{
+  text-align: left;
+  padding: 0.65rem 0.5rem;
+  font-size: 0.875rem;
+  border-bottom: 1px solid var(--border);
+}}
+
+thead th {{
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding-bottom: 0.75rem;
+}}
+
+.table-row:last-child td {{
+  border-bottom: none;
+}}
+
+.table-row:hover td {{
+  background: rgba(56,189,248,0.03);
+}}
+
+.muted {{ color: var(--muted); }}
+
+/* ── Forms / Inputs ──────────────────────── */
+.input-row {{
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+  flex-wrap: wrap;
+}}
+
+.text-input {{
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  padding: 0.5rem 0.875rem;
+  color: var(--bright);
+  font-size: 0.875rem;
+  font-family: inherit;
+  flex: 1;
+  min-width: 200px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  outline: none;
+}}
+
+.text-input:focus {{
+  border-color: rgba(56,189,248,0.5);
+  box-shadow: 0 0 0 3px rgba(56,189,248,0.08);
+}}
+
+.text-input::placeholder {{
+  color: var(--muted);
+}}
+
+/* ── Buttons ─────────────────────────────── */
+.btn-primary {{
+  display: inline-block;
+  background: var(--accent);
+  color: #0d1117;
+  padding: 0.5rem 1.125rem;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: inherit;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
+  transition: box-shadow 0.2s, background-color 0.2s;
+  white-space: nowrap;
+}}
+
+.btn-primary:hover {{
+  background: #7dd3fc;
+  box-shadow: 0 0 18px rgba(56,189,248,0.35);
+}}
+
+.btn-sm {{
+  padding: 0.25rem 0.6rem;
+  font-size: 0.78rem;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  color: white;
+  font-family: inherit;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}}
+
+.btn-sm:hover {{ opacity: 0.85; }}
+
+.btn-danger {{
+  background: #b91c1c;
+}}
+
+.btn-danger:hover {{
+  background: #ef4444;
+}}
+
+/* ── Billing Cards ───────────────────────── */
+.billing-cards {{
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 0.5rem;
+}}
+
+.billing-card {{
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}}
+
+.billing-card:hover {{
+  border-color: rgba(56,189,248,0.25);
+  box-shadow: 0 0 20px rgba(56,189,248,0.07);
+  transform: translateY(-2px);
+}}
+
+.billing-card-popular {{
+  border-color: rgba(56,189,248,0.45);
+  box-shadow: 0 0 0 1px rgba(56,189,248,0.45), 0 0 28px rgba(56,189,248,0.12);
+}}
+
+.billing-popular-badge {{
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #0d1117;
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  padding: 0.2rem 0.75rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}}
+
+.billing-tier {{
+  font-size: 0.7rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}}
+
+.billing-price {{
+  display: flex;
+  align-items: flex-end;
+  gap: 0.25rem;
+  margin-bottom: 1.125rem;
+}}
+
+.billing-amount {{
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--bright);
+  line-height: 1;
+}}
+
+.billing-period {{
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}}
+
+.billing-features {{
+  list-style: none;
+  font-size: 0.8rem;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1;
+  margin-bottom: 1.25rem;
+}}
+
+.billing-features li {{
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}}
+
+.check {{
+  color: var(--accent);
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}}
+
+.billing-btn {{
+  width: 100%;
+  padding: 0.55rem;
+  border-radius: 7px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.15s, box-shadow 0.2s, background-color 0.2s;
+}}
+
+.billing-btn:hover {{ opacity: 0.9; }}
+
+.billing-btn-accent {{
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid rgba(56,189,248,0.4) !important;
+  border: 1px solid rgba(56,189,248,0.4);
+  transition: background 0.2s, border-color 0.2s;
+}}
+
+.billing-btn-accent:hover {{
+  background: rgba(56,189,248,0.08);
+  border-color: rgba(56,189,248,0.6) !important;
+  opacity: 1;
+}}
+
+.billing-btn-solid {{
+  background: var(--accent);
+  color: #0d1117;
+}}
+
+.billing-btn-solid:hover {{
+  background: #7dd3fc;
+  box-shadow: 0 0 16px rgba(56,189,248,0.3);
+  opacity: 1;
+}}
+
+.billing-btn-ghost {{
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border2) !important;
+  border: 1px solid var(--border2);
+  transition: color 0.2s, border-color 0.2s;
+}}
+
+.billing-btn-ghost:hover {{
+  color: var(--bright);
+  border-color: var(--border2) !important;
+  opacity: 1;
+}}
+
+/* ── Responsive ──────────────────────────── */
+@media (max-width: 600px) {{
+  .nav {{ padding: 0 1rem; }}
+  .nav-username {{ display: none; }}
+  .container {{ padding: 1.5rem 1rem 3rem; }}
+  .stats-grid {{ grid-template-columns: repeat(2, 1fr); }}
+  .section {{ padding: 1.25rem; }}
+  .billing-cards {{ grid-template-columns: 1fr; }}
+  .input-row {{ flex-direction: column; align-items: stretch; }}
+  .text-input {{ min-width: unset; }}
+}}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-brand">
+    <div class="nav-logo-mark">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <circle cx="7" cy="7" r="2.5" fill="#38bdf8"/>
+        <circle cx="7" cy="7" r="5.5" stroke="#38bdf8" stroke-width="1" stroke-dasharray="2 2" opacity="0.5"/>
+      </svg>
     </div>
+    <span class="nav-brand-name">vigil</span>
+    <span class="tier-badge">{user['tier']}</span>
+  </div>
+  <div class="nav-right">
+    <span class="nav-username">{user['name']}</span>
+    <img class="nav-avatar" src="{user.get('avatar_url', '')}" alt="{user['name']}" />
+    <a href="/auth/logout" class="nav-logout">Logout</a>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- Stats Grid -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Signals this month</div>
+      <div class="stat-value">{usage['signal_count']:,}</div>
+      <div class="bar-bg"><div class="bar-fill" style="width:{usage_pct}%"></div></div>
+      <div class="bar-meta">{usage_pct}% of {signal_limit_display}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Compiles</div>
+      <div class="stat-value">{usage['compile_count']:,}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Tier</div>
+      <div class="stat-value" style="font-size:1.4rem">{user['tier'].title()}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Project</div>
+      <div class="stat-value" style="font-size:1.1rem;line-height:1.3">{project['name'] if project else 'None'}</div>
+    </div>
+  </div>
+
+  <!-- Connect Your Agent -->
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title">Connect Your Agent</h2>
+      <div class="section-rule"></div>
+    </div>
+    <p class="section-desc">{"Create an API key below, then add this to your agent:" if not has_keys else "Add this to your agent's environment or MCP config:"}</p>
+    <div class="code-block"><span class="hl-muted"># Environment</span>
+<span class="hl-cyan">VIGIL_API_URL</span>=https://app.vigil-agent.com
+<span class="hl-cyan">VIGIL_API_KEY</span>={first_key_prefix}
+
+<span class="hl-muted"># Send a signal:</span>
+<span class="hl-green">curl</span> -X POST https://app.vigil-agent.com/api/signal \
+  -H <span class="hl-yellow">"Authorization: Bearer {first_key_prefix}"</span> \
+  -H <span class="hl-yellow">"Content-Type: application/json"</span> \
+  -d '<span class="hl-yellow">{{"agent":"my-agent","content":"hello world","signal_type":"observation"}}</span>'
+
+<span class="hl-muted"># Boot with awareness:</span>
+<span class="hl-green">curl</span> -H <span class="hl-yellow">"Authorization: Bearer {first_key_prefix}"</span> \
+  https://app.vigil-agent.com/api/boot</div>
+  </div>
+
+  {test_signal_html}
+
+  <!-- Recent Activity -->
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title">Recent Activity</h2>
+      <div class="section-rule"></div>
+    </div>
+    {activity_html}
+  </div>
+
+  <!-- API Keys -->
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title">API Keys</h2>
+      <div class="section-rule"></div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Key</th><th>Name</th><th>Last Used</th><th></th></tr>
+      </thead>
+      <tbody>{keys_html if keys_html else '<tr><td colspan="4" style="padding:1rem 0.5rem;color:var(--muted);font-size:0.875rem;">No API keys yet. Create one below.</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:1.25rem">
+      <form method="POST" action="/dashboard/keys/create" class="input-row">
+        <input type="text" name="key_name" placeholder="Key name" value="default" class="text-input" style="max-width:220px;flex:unset;">
+        <button type="submit" class="btn-primary">Create Key</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Billing -->
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title">Billing</h2>
+      <div class="section-rule"></div>
+    </div>
+    {billing_html}
+  </div>
+
 </div>
 </body></html>""")
