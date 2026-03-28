@@ -254,8 +254,68 @@ cp completions/vigil.zsh ~/.zsh/completions/_vigil
 | `vigil forget <key>` | Delete a knowledge entry |
 | `vigil extract` | Auto-extract knowledge from signal patterns |
 | `vigil export` | Export state to markdown |
+| `vigil mcp-health` | MCP server health (calls, errors, latency) |
 | `vigil doctor` | Diagnose common issues |
 | `vigil version` | Show version |
+
+## MCP Production Observability
+
+Monitor any MCP server with one line of code. Tracks tool calls, latency, errors, and emits alerts automatically.
+
+```python
+from mcp.server.fastmcp import FastMCP
+from vigil.mcpwatch import instrument
+
+mcp = FastMCP("my-server")
+
+@mcp.tool()
+async def search(query: str) -> str:
+    return "results"
+
+# One line — all tools are now monitored
+watch = instrument(mcp)
+```
+
+**What it monitors:**
+- Every tool call: name, duration, success/error
+- Latency spikes (configurable threshold, default 5s)
+- Error patterns with full tracebacks
+- Silent failures (no calls for N minutes)
+
+**Three ways to use it:**
+
+```python
+# 1. Local Vigil — store in same DB as your signals
+watch = instrument(mcp, db_path="vigil.db")
+
+# 2. Vigil Cloud — send to your hosted instance
+watch = instrument(mcp, api_key="vgl_...")
+
+# 3. Memory-only — just in-process stats
+watch = instrument(mcp)
+```
+
+**Check health anytime:**
+```python
+health = watch.health()
+# {'server': 'my-server', 'status': 'healthy', 'total_calls': 1247,
+#  'error_rate': 0.02, 'tools': {'search': {'avg_ms': 42, 'p95_ms': 180}}}
+```
+
+**CLI:**
+```bash
+vigil mcp-health              # All monitored servers
+vigil mcp-health -s my-server # Specific server
+```
+
+**REST API (5 endpoints):**
+| Endpoint | Description |
+|----------|-------------|
+| `GET /mcp/health` | Server health summary |
+| `GET /mcp/tools` | Per-tool analytics |
+| `GET /mcp/errors` | Recent errors |
+| `GET /mcp/latency` | p50/p95/p99 percentiles |
+| `GET /mcp/volume` | Call volume over time |
 
 ## Why Not Just Use Mem0/Letta/LangGraph?
 
