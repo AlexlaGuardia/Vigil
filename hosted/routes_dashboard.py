@@ -157,6 +157,30 @@ async def revoke_key(key_id: str, request: Request):
     return RedirectResponse("/dashboard", status_code=302)
 
 
+@router.post("/dashboard/test-signal")
+async def test_signal(request: Request):
+    """Send a test signal from the dashboard."""
+    from hosted.app import get_platform_db
+    from hosted.tenant import get_tenant_state
+    pdb = get_platform_db()
+    user = _require_user(request, pdb)
+    if not user:
+        return RedirectResponse("/auth/login")
+
+    projects = pdb.get_projects(user["id"])
+    if not projects:
+        return RedirectResponse("/dashboard", status_code=302)
+
+    form = await request.form()
+    content = form.get("content", "Test signal from dashboard")
+
+    state = get_tenant_state(projects[0]["id"])
+    state["bus"].emit(from_agent="dashboard", content=content, signal_type="observation")
+    pdb.increment_usage(projects[0]["id"], "signal_count")
+
+    return RedirectResponse("/dashboard", status_code=302)
+
+
 # ── Login page ───────────────────────────────────────────────
 
 @router.get("/", response_class=HTMLResponse)
@@ -189,6 +213,21 @@ p { color: #8b949e; margin-bottom: 2rem; }
 
 def _render_dashboard(user, project, usage, limits, keys, usage_pct):
     """Render the dashboard HTML inline (no template engine needed for MVP)."""
+    # Get the first key prefix for connect instructions
+    first_key_prefix = keys[0]['key_prefix'] + "..." if keys else "your-api-key-here"
+    has_keys = len(keys) > 0
+
+    # Get recent signals for activity feed
+    recent_signals = []
+    if project:
+        from hosted.tenant import get_tenant_state
+        try:
+            tenant_state = get_tenant_state(project["id"])
+            recent_sigs = tenant_state["bus"].read(hours=24, limit=5)
+            recent_signals = [s.to_dict() for s in recent_sigs]
+        except Exception:
+            pass
+
     keys_html = ""
     for k in keys:
         keys_html += f"""
@@ -268,13 +307,40 @@ code {{ background: #0d1117; padding: 0.15rem 0.4rem; border-radius: 4px; font-s
 
     <div class="section">
         <h2>Connect Your Agent</h2>
-        <p style="color:#8b949e; margin-bottom:1rem; font-size:0.9rem">Add this to your agent's environment or MCP config:</p>
+        <p style="color:#8b949e; margin-bottom:1rem; font-size:0.9rem">{"Create an API key below, then add this to your agent:" if not has_keys else "Add this to your agent's environment or MCP config:"}</p>
         <div class="connect">VIGIL_API_URL=https://app.vigil-agent.com
-VIGIL_API_KEY=your-api-key-here
+VIGIL_API_KEY={first_key_prefix}
 
-# Or use the REST API directly:
-curl -H "Authorization: Bearer your-key" \\
+# Send a signal:
+curl -X POST https://app.vigil-agent.com/api/signal \\
+  -H "Authorization: Bearer {first_key_prefix}" \\
+  -H "Content-Type: application/json" \\
+  -d '{{"agent":"my-agent","content":"hello world","signal_type":"observation"}}'
+
+# Boot with awareness:
+curl -H "Authorization: Bearer {first_key_prefix}" \\
   https://app.vigil-agent.com/api/boot</div>
+    </div>
+
+    {"" if not has_keys else '''<div class="section">
+        <h2>Send Test Signal</h2>
+        <p style="color:#8b949e; margin-bottom:0.75rem; font-size:0.9rem">Verify your setup — send a test signal right now.</p>
+        <form method="POST" action="/dashboard/test-signal" style="display:flex; gap:0.5rem; align-items:center;">
+            <input type="text" name="content" placeholder="Test signal content..." value="Hello from Vigil Cloud!"
+                   style="background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:0.5rem; color:#e6edf3; font-size:0.9rem; flex:1;">
+            <button type="submit" class="btn">Send Signal</button>
+        </form>
+    </div>'''}
+
+    <div class="section">
+        <h2>Recent Activity</h2>
+        {"<p style='color:#8b949e; font-size:0.9rem'>No signals yet. Connect an agent or send a test signal above.</p>" if not recent_signals else ""}
+        {"".join(f"""<div style="border-bottom:1px solid #21262d; padding:0.5rem 0;">
+            <span style="color:#38bdf8; font-size:0.8rem; font-family:monospace;">{s.get('from_agent','?')}</span>
+            <span style="color:#8b949e; font-size:0.75rem; margin-left:0.5rem;">{s.get('signal_type','')}</span>
+            <span style="color:#8b949e; font-size:0.75rem; float:right;">{str(s.get('created_at',''))[:19]}</span>
+            <div style="color:#e6edf3; font-size:0.85rem; margin-top:0.25rem;">{s.get('content','')[:120]}</div>
+        </div>""" for s in recent_signals)}
     </div>
 
     <div class="section">
