@@ -8,8 +8,8 @@ TENANTS_DIR = os.path.join(DATA_DIR, "tenants")
 
 SESSION_SECRET = os.environ.get("VIGIL_SESSION_SECRET", "change-me-in-production")
 
-GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
-GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
+GITHUB_CLIENT_ID = os.environ.get("VIGIL_GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.environ.get("VIGIL_GITHUB_CLIENT_SECRET", "")
 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")

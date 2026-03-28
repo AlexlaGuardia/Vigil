@@ -105,6 +105,10 @@ def create_hosted_app() -> FastAPI:
         version="2.0.0",
     )
 
+    # Mount dashboard routes (auth, UI, key management)
+    from hosted.routes_dashboard import router as dashboard_router
+    app.include_router(dashboard_router)
+
     # ── Health (no auth) ─────────────────────────────────────
 
     @app.get("/health")
