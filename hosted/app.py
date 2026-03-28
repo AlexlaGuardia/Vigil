@@ -353,4 +353,100 @@ def create_hosted_app() -> FastAPI:
             },
         }
 
+    # ── MCP Observability (tenant-scoped) ─────────────────────
+
+    @app.get("/api/mcp/health")
+    async def mcp_health(
+        server: str = Query(""),
+        tenant: TenantContext = Depends(resolve_tenant),
+    ):
+        """MCP server health for this tenant."""
+        db = tenant.state["db"]
+        if server:
+            servers = [server]
+        else:
+            rows = db.query_all("SELECT DISTINCT server_name FROM mcp_events ORDER BY server_name")
+            servers = [r["server_name"] for r in rows]
+
+        if not servers:
+            return {"servers": [], "message": "No MCP events yet. Use `from vigil.mcpwatch import instrument` to start monitoring."}
+
+        result = []
+        for srv in servers:
+            stats = db.query_one(
+                "SELECT COUNT(*) as total_calls, "
+                "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as total_errors, "
+                "AVG(duration_ms) as avg_ms, MAX(duration_ms) as max_ms, "
+                "MIN(created_at) as first_seen, MAX(created_at) as last_seen "
+                "FROM mcp_events WHERE server_name = ?", (srv,),
+            )
+            tools = db.query_all(
+                "SELECT tool_name, COUNT(*) as calls, "
+                "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errors, "
+                "AVG(duration_ms) as avg_ms, MAX(duration_ms) as max_ms "
+                "FROM mcp_events WHERE server_name = ? AND created_at > datetime('now', '-24 hours') "
+                "GROUP BY tool_name ORDER BY calls DESC", (srv,),
+            )
+            total = stats["total_calls"] or 0
+            errors = stats["total_errors"] or 0
+            error_rate = errors / total if total else 0
+            result.append({
+                "server": srv,
+                "status": "unhealthy" if error_rate > 0.5 else ("degraded" if error_rate > 0.1 else "healthy"),
+                "total_calls": total, "total_errors": errors,
+                "error_rate": round(error_rate, 4),
+                "avg_ms": round(stats["avg_ms"] or 0, 2),
+                "last_seen": stats["last_seen"],
+                "tools_24h": tools,
+            })
+        return {"servers": result}
+
+    @app.get("/api/mcp/errors")
+    async def mcp_errors(
+        server: str = Query(""),
+        limit: int = Query(50, ge=1, le=200),
+        tenant: TenantContext = Depends(resolve_tenant),
+    ):
+        """Recent MCP tool errors for this tenant."""
+        db = tenant.state["db"]
+        if server:
+            rows = db.query_all(
+                "SELECT server_name, tool_name, duration_ms, error, created_at "
+                "FROM mcp_events WHERE status='error' AND server_name=? ORDER BY created_at DESC LIMIT ?",
+                (server, limit),
+            )
+        else:
+            rows = db.query_all(
+                "SELECT server_name, tool_name, duration_ms, error, created_at "
+                "FROM mcp_events WHERE status='error' ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return {"errors": rows, "count": len(rows)}
+
+    @app.get("/api/mcp/latency")
+    async def mcp_latency(
+        server: str = Query(""),
+        hours: int = Query(24, ge=1, le=168),
+        tenant: TenantContext = Depends(resolve_tenant),
+    ):
+        """Latency percentiles for this tenant."""
+        db = tenant.state["db"]
+        params = [f"-{hours} hours"]
+        q = "SELECT duration_ms FROM mcp_events WHERE created_at > datetime('now', ?) "
+        if server:
+            q += "AND server_name = ? "
+            params.append(server)
+        q += "ORDER BY duration_ms"
+        rows = db.query_all(q, tuple(params))
+        if not rows:
+            return {"p50": 0, "p95": 0, "p99": 0, "count": 0, "hours": hours}
+        durations = [r["duration_ms"] for r in rows]
+        n = len(durations)
+        return {
+            "p50": round(durations[int(n * 0.50)], 2),
+            "p95": round(durations[int(n * 0.95)], 2),
+            "p99": round(durations[min(int(n * 0.99), n - 1)], 2),
+            "count": n, "hours": hours,
+        }
+
     return app
