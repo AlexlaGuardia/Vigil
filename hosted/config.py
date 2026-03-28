@@ -14,6 +14,12 @@ GITHUB_CLIENT_SECRET = os.environ.get("VIGIL_GITHUB_CLIENT_SECRET", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 
+STRIPE_PRICES = {
+    "pro": os.environ.get("VIGIL_STRIPE_PRICE_PRO", ""),
+    "team": os.environ.get("VIGIL_STRIPE_PRICE_TEAM", ""),
+    "enterprise": os.environ.get("VIGIL_STRIPE_PRICE_ENTERPRISE", ""),
+}
+
 APP_URL = os.environ.get("VIGIL_APP_URL", "https://app.vigil-agent.com")
 
 TIERS = {

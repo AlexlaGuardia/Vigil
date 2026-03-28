@@ -109,6 +109,10 @@ def create_hosted_app() -> FastAPI:
     from hosted.routes_dashboard import router as dashboard_router
     app.include_router(dashboard_router)
 
+    # Mount billing routes (Stripe checkout, portal, webhooks)
+    from hosted.billing import router as billing_router
+    app.include_router(billing_router)
+
     # ── Health (no auth) ─────────────────────────────────────
 
     @app.get("/health")

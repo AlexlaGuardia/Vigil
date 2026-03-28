@@ -289,5 +289,21 @@ curl -H "Authorization: Bearer your-key" \\
             <button type="submit" class="btn">Create Key</button>
         </form>
     </div>
+
+    <div class="section">
+        <h2>Billing</h2>
+        {"" if user['tier'] != 'free' else '''
+        <p style="color:#8b949e; margin-bottom:1rem; font-size:0.9rem">Upgrade for more signals, unlimited agents, and hosted dashboard.</p>
+        <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+            <form method="POST" action="/billing/checkout/pro"><button type="submit" class="btn">Upgrade to Pro — $9/mo</button></form>
+            <form method="POST" action="/billing/checkout/team"><button type="submit" class="btn" style="background:#6f42c1;">Upgrade to Team — $29/mo</button></form>
+            <form method="POST" action="/billing/checkout/enterprise"><button type="submit" class="btn" style="background:#0969da;">Upgrade to Enterprise — $99/mo</button></form>
+        </div>
+        '''}
+        {"" if user['tier'] == 'free' else '''
+        <p style="color:#8b949e; margin-bottom:1rem; font-size:0.9rem">Manage your subscription, update payment method, or cancel.</p>
+        <form method="POST" action="/billing/portal"><button type="submit" class="btn">Manage Subscription</button></form>
+        '''}
+    </div>
 </div>
 </body></html>""")
