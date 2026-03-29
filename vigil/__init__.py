@@ -5,7 +5,7 @@ Awareness daemon, frame-based tool filtering, signal protocol,
 session handoff, and signal compaction.
 """
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 from vigil.signals import Signal, SignalType, SignalBus
 from vigil.frames import Frame, FrameDetector
