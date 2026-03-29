@@ -61,6 +61,39 @@ vigil signal test-agent "Server CPU at 95%" --type alert
 vigil status
 ```
 
+### MCP Server Alerts → Slack
+
+Route MCPWatch alerts (tool errors, latency spikes) to Slack:
+
+```bash
+# Via CLI
+vigil triggers --action add \
+  --name "mcp-errors-to-slack" \
+  --signal_type "alert" \
+  --agent_pattern "mcpwatch/*" \
+  --action_type "webhook" \
+  --action_config '{"url":"https://hooks.slack.com/services/T.../B.../xxx","method":"POST","template":{"text":":warning: MCP Alert: {content}"}}'
+```
+
+```python
+# Via Python
+triggers.create(
+    name="mcp-errors-to-slack",
+    signal_type="alert",
+    agent_pattern="mcpwatch/*",
+    action_type="webhook",
+    action_config={
+        "url": "https://hooks.slack.com/services/T.../B.../xxx",
+        "method": "POST",
+        "template": {
+            "text": ":warning: MCP Alert: {content}"
+        }
+    },
+)
+```
+
+MCPWatch emits alerts as agent `mcpwatch/<server-name>` — the glob pattern `mcpwatch/*` catches all servers.
+
 ## Trigger Patterns
 
 | Pattern | Matches |
