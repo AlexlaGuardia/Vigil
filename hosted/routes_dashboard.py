@@ -151,11 +151,34 @@ async def dashboard(request: Request):
                 "FROM signals WHERE created_at > datetime('now', '-7 days') "
                 "GROUP BY day ORDER BY day"
             )
+
+            # Signal type distribution
+            signal_types = tdb.query_all(
+                "SELECT signal_type, COUNT(*) as count FROM signals "
+                "WHERE created_at > datetime('now', '-7 days') "
+                "GROUP BY signal_type ORDER BY count DESC"
+            )
+
+            # Hourly volume — last 24h for bar chart
+            hourly_volume = tdb.query_all(
+                "SELECT strftime('%H', created_at) as hour, COUNT(*) as count "
+                "FROM signals WHERE created_at > datetime('now', '-24 hours') "
+                "GROUP BY hour ORDER BY hour"
+            )
         except Exception:
-            pass
+            signal_types = []
+            hourly_volume = []
+
+    # Get first API key prefix for WebSocket connection
+    ws_key = ""
+    if keys:
+        # We need the actual key prefix for the WS URL hint — but we only store hashes
+        # Just show connection instructions with placeholder
+        ws_key = keys[0].get("key_prefix", "") + "..."
 
     return _render_dashboard(user, project, usage, limits, keys, usage_pct,
-                             agents_data, mcp_servers_data, signal_volume)
+                             agents_data, mcp_servers_data, signal_volume,
+                             signal_types, hourly_volume, ws_key)
 
 
 @router.post("/dashboard/keys/create")
@@ -262,11 +285,14 @@ p { color: #8b949e; margin-bottom: 2rem; }
 # ── Dashboard HTML renderer ──────────────────────────────────
 
 def _render_dashboard(user, project, usage, limits, keys, usage_pct,
-                      agents_data=None, mcp_servers_data=None, signal_volume=None):
+                      agents_data=None, mcp_servers_data=None, signal_volume=None,
+                      signal_types=None, hourly_volume=None, ws_key=""):
     """Render the dashboard HTML inline (no template engine needed for MVP)."""
     agents_data = agents_data or []
     mcp_servers_data = mcp_servers_data or []
     signal_volume = signal_volume or []
+    signal_types = signal_types or []
+    hourly_volume = hourly_volume or []
 
     # Get the first key prefix for connect instructions
     first_key_prefix = keys[0]['key_prefix'] + "..." if keys else "your-api-key-here"
@@ -392,6 +418,127 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct,
     </form>"""
 
     billing_html = billing_free_html if user['tier'] == 'free' else billing_paid_html
+
+    # ── Signal Analytics section ───────────────────────────
+    analytics_html = ""
+    if signal_types or hourly_volume:
+        # Hourly bar chart (24h)
+        hourly_chart = ""
+        if hourly_volume:
+            hour_map = {int(h["hour"]): h["count"] for h in hourly_volume}
+            max_hourly = max(hour_map.values()) if hour_map else 1
+            bars = ""
+            for h in range(24):
+                count = hour_map.get(h, 0)
+                pct = (count / max_hourly * 100) if max_hourly else 0
+                label = f"{h:02d}"
+                bars += f'''<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;">
+                    <div style="width:100%;background:var(--border);border-radius:3px 3px 0 0;height:80px;position:relative;">
+                        <div style="position:absolute;bottom:0;width:100%;height:{pct}%;background:linear-gradient(180deg,#38bdf8,#818cf8);border-radius:3px 3px 0 0;transition:height 0.3s;min-height:{1 if count else 0}px;"></div>
+                    </div>
+                    <span style="font-size:0.55rem;color:var(--muted);font-family:'JetBrains Mono',monospace;">{label}</span>
+                </div>'''
+
+            hourly_chart = f'''
+            <div style="margin-bottom:1.5rem;">
+                <div style="font-size:0.75rem;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.75rem;">Signal Volume (24h by hour)</div>
+                <div style="display:flex;gap:2px;align-items:flex-end;">{bars}</div>
+            </div>'''
+
+        # Type distribution horizontal bars
+        type_chart = ""
+        if signal_types:
+            type_colors = {
+                "observation": "#38bdf8",
+                "alert": "#f59e0b",
+                "handoff": "#818cf8",
+                "summary": "#4ade80",
+            }
+            total_signals = sum(t["count"] for t in signal_types)
+            type_bars = ""
+            for t in signal_types:
+                color = type_colors.get(t["signal_type"], "#8b949e")
+                pct = (t["count"] / total_signals * 100) if total_signals else 0
+                type_bars += f'''<div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+                    <span style="width:90px;font-size:0.78rem;font-family:'JetBrains Mono',monospace;color:{color};">{t["signal_type"]}</span>
+                    <div style="flex:1;background:var(--border);border-radius:4px;height:20px;overflow:hidden;">
+                        <div style="height:100%;width:{pct}%;background:{color};border-radius:4px;opacity:0.8;transition:width 0.3s;"></div>
+                    </div>
+                    <span style="font-size:0.78rem;color:var(--muted);font-variant-numeric:tabular-nums;width:50px;text-align:right;">{t["count"]}</span>
+                </div>'''
+
+            type_chart = f'''
+            <div>
+                <div style="font-size:0.75rem;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.75rem;">Signal Types (7 days)</div>
+                {type_bars}
+            </div>'''
+
+        analytics_html = f"""
+    <div class="section">
+        <div class="section-header">
+            <h2 class="section-title">Signal Analytics</h2>
+            <div class="section-rule"></div>
+        </div>
+        {hourly_chart}
+        {type_chart}
+    </div>"""
+
+    # ── Live feed WebSocket script ─────────────────────────
+    live_feed_script = ""
+    if ws_key:
+        live_feed_script = """
+<script>
+(function() {
+  const feed = document.getElementById('live-feed');
+  if (!feed) return;
+
+  const typeColors = {
+    observation: '#38bdf8', alert: '#f59e0b', error: '#f87171',
+    handoff: '#818cf8', summary: '#4ade80', action: '#4ade80',
+  };
+
+  function addSignal(s) {
+    const color = typeColors[s.signal_type] || '#8b949e';
+    const time = (s.created_at || '').slice(0, 19);
+    const content = (s.content || '').slice(0, 120);
+    const el = document.createElement('div');
+    el.className = 'activity-entry';
+    el.style.borderLeftColor = color;
+    el.style.animation = 'fadeSlide 0.3s ease';
+    el.innerHTML = `
+      <div class="activity-meta">
+        <span class="activity-agent">${s.from_agent || '?'}</span>
+        <span class="activity-type" style="color:${color}">${s.signal_type || ''}</span>
+        <span class="activity-time">${time}</span>
+      </div>
+      <div class="activity-content">${content}</div>`;
+    feed.prepend(el);
+    // Keep max 20
+    while (feed.children.length > 20) feed.removeChild(feed.lastChild);
+  }
+
+  // Pulse indicator
+  const dot = document.getElementById('live-dot');
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(proto + '//' + location.host + '/ws/signals?key=' + encodeURIComponent(feed.dataset.key));
+    ws.onopen = () => { if (dot) dot.style.background = '#4ade80'; };
+    ws.onclose = () => { if (dot) dot.style.background = '#f87171'; setTimeout(connect, 5000); };
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === 'ping') return;
+        addSignal(data);
+      } catch(err) {}
+    };
+  }
+  connect();
+})();
+</script>
+<style>
+@keyframes fadeSlide { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+</style>"""
 
     # ── Signal volume sparkline SVG ────────────────────────
     sparkline_svg = ""
@@ -1144,13 +1291,22 @@ thead th {{
 
   {test_signal_html}
 
-  <!-- Recent Activity -->
+  <!-- Signal Analytics -->
+  {analytics_html}
+
+  <!-- Recent Activity (live via WebSocket) -->
   <div class="section">
     <div class="section-header">
       <h2 class="section-title">Recent Activity</h2>
       <div class="section-rule"></div>
+      <div style="display:flex;align-items:center;gap:0.4rem;margin-left:auto;">
+        <div id="live-dot" style="width:6px;height:6px;border-radius:50%;background:#8b949e;"></div>
+        <span style="font-size:0.65rem;color:var(--muted);font-family:'JetBrains Mono',monospace;">LIVE</span>
+      </div>
     </div>
+    <div id="live-feed" data-key="{first_key_prefix}">
     {activity_html}
+    </div>
   </div>
 
   {agents_html}
@@ -1187,4 +1343,5 @@ thead th {{
   </div>
 
 </div>
+{live_feed_script}
 </body></html>""")
