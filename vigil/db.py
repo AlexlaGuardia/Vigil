@@ -117,6 +117,18 @@ CREATE TABLE IF NOT EXISTS triggers (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Audit log: who did what, when (compliance-ready)
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT,
+    resource_id TEXT,
+    detail TEXT,
+    ip_address TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- MCP Events: tool call monitoring for mcpwatch
 CREATE TABLE IF NOT EXISTS mcp_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +141,9 @@ CREATE TABLE IF NOT EXISTS mcp_events (
 );
 
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
 CREATE INDEX IF NOT EXISTS idx_mcp_events_server ON mcp_events(server_name);
 CREATE INDEX IF NOT EXISTS idx_mcp_events_created ON mcp_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_mcp_events_tool ON mcp_events(tool_name);
@@ -325,6 +340,38 @@ class VigilDB:
             "UPDATE sessions SET summary = ?, next_steps = ?, ended_at = CURRENT_TIMESTAMP WHERE id = ?",
             (summary, next_steps, session_id),
         )
+
+    # -- Audit log --
+
+    def audit(
+        self,
+        actor: str,
+        action: str,
+        resource_type: str = "",
+        resource_id: str = "",
+        detail: str = "",
+        ip_address: str = "",
+    ) -> int:
+        """Record an audit log entry."""
+        return self.execute(
+            "INSERT INTO audit_log (actor, action, resource_type, resource_id, detail, ip_address) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (actor, action, resource_type, resource_id, detail[:1000], ip_address),
+        )
+
+    def get_audit_log(self, limit: int = 50, actor: str = "", action: str = "") -> list:
+        """Get recent audit log entries."""
+        query = "SELECT id, actor, action, resource_type, resource_id, detail, ip_address, created_at FROM audit_log WHERE 1=1"
+        params = []
+        if actor:
+            query += " AND actor = ?"
+            params.append(actor)
+        if action:
+            query += " AND action = ?"
+            params.append(action)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        return self.query_all(query, tuple(params))
 
     # -- Maintenance --
 

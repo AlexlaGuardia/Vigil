@@ -198,6 +198,17 @@ async def create_key(request: Request):
     name = form.get("key_name", "default")
     plaintext, _ = pdb.create_api_key(projects[0]["id"], name=name)
 
+    # Audit log
+    from hosted.tenant import get_tenant_state
+    try:
+        tstate = get_tenant_state(projects[0]["id"])
+        tstate["db"].audit(
+            actor=user["name"], action="key.create",
+            resource_type="api_key", detail=f"Created key '{name}'",
+        )
+    except Exception:
+        pass
+
     # Show the key once
     return HTMLResponse(f"""<!DOCTYPE html>
 <html><head><title>API Key Created</title>
@@ -227,6 +238,20 @@ async def revoke_key(key_id: str, request: Request):
     if not user:
         return RedirectResponse("/auth/login")
     pdb.revoke_api_key(key_id)
+
+    # Audit log
+    projects = pdb.get_projects(user["id"])
+    if projects:
+        from hosted.tenant import get_tenant_state
+        try:
+            tstate = get_tenant_state(projects[0]["id"])
+            tstate["db"].audit(
+                actor=user["name"], action="key.revoke",
+                resource_type="api_key", resource_id=key_id,
+            )
+        except Exception:
+            pass
+
     return RedirectResponse("/dashboard", status_code=302)
 
 

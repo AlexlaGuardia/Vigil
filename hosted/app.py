@@ -173,6 +173,17 @@ def create_hosted_app() -> FastAPI:
         # Broadcast to WebSocket clients
         await _tenant_broadcasters.broadcast(tenant.project_id, sig.to_dict())
 
+        # Audit alert-type signals (high-value events)
+        if req.signal_type == "alert":
+            try:
+                tenant.state["db"].audit(
+                    actor=req.agent, action="signal.alert",
+                    resource_type="signal", resource_id=str(sig.id),
+                    detail=req.content[:200],
+                )
+            except Exception:
+                pass
+
         return {
             "signal_id": sig.id,
             "type": sig.signal_type.value,
@@ -361,6 +372,19 @@ def create_hosted_app() -> FastAPI:
                 "agent_limit": limits["agent_limit"],
             },
         }
+
+    # ── Audit Log (tenant-scoped) ───────────────────────────
+
+    @app.get("/api/audit")
+    async def audit_log(
+        limit: int = Query(50, ge=1, le=200),
+        actor: str = Query(""),
+        action: str = Query(""),
+        tenant: TenantContext = Depends(resolve_tenant),
+    ):
+        """Get audit log entries for this project."""
+        entries = tenant.state["db"].get_audit_log(limit=limit, actor=actor, action=action)
+        return {"entries": entries, "count": len(entries)}
 
     # ── MCP Observability (tenant-scoped) ─────────────────────
 

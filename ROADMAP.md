@@ -126,7 +126,7 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [x] Multi-tenant daemon: background compile cycle (120s), active tenants only
 - [ ] Team invites: email-based, role-based (admin/member/viewer)
 - [ ] Rate limiting per tier (beyond signal count)
-- [ ] Audit log: who did what, when (compliance-ready)
+- [x] Audit log: tracks key create/revoke, alert signals, with REST endpoint + filtering
 
 ### Policy Engine
 - [ ] Per-frame access control: which agents can access which frames
@@ -137,7 +137,7 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 
 ### Advanced Dashboard
 - [x] Real-time signal stream (WebSocket at /ws/signals, replaces htmx polling)
-- [ ] Signal analytics: volume over time, type distribution, agent activity heatmap
+- [x] Signal analytics: hourly volume bar chart, type distribution bars, agent table
 - [ ] Handoff timeline visualization (Gantt-style)
 - [ ] Frame switching UI (click to change active frame)
 - [ ] Trigger builder: visual rule editor (no JSON editing)

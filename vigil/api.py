@@ -758,10 +758,22 @@ def create_app(
             r["avg_ms"] = round(r["avg_ms"] or 0, 2)
         return {"buckets": rows, "hours": hours}
 
+    # ── Audit Log ──────────────────────────────────────────────
+
+    @app.get("/audit", dependencies=[Depends(verify_key)])
+    async def audit_log(
+        limit: int = Query(50, ge=1, le=200),
+        actor: str = Query(""),
+        action: str = Query(""),
+    ):
+        """Get audit log entries."""
+        entries = state["db"].get_audit_log(limit=limit, actor=actor, action=action)
+        return {"entries": entries, "count": len(entries)}
+
     @app.get("/health")
     async def health():
         """Health check — no auth required."""
-        return {"status": "ok", "version": "1.5.0"}
+        return {"status": "ok", "version": "2.2.0"}
 
     return app
 
