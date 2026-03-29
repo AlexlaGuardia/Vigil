@@ -176,6 +176,21 @@ async def dashboard(request: Request):
         # Just show connection instructions with placeholder
         ws_key = keys[0].get("key_prefix", "") + "..."
 
+    # Onboarding detection
+    new_key = request.query_params.get("new_key", "")
+    is_new_user = len(keys) == 0 and usage["signal_count"] == 0 and not new_key
+
+    # State B: key just created via onboarding (new_key in URL)
+    if new_key:
+        return HTMLResponse(_render_onboarding_connect(user, new_key, APP_URL))
+
+    # State A: brand new user, no keys, no signals
+    if is_new_user:
+        return HTMLResponse(_render_onboarding_create_key(user))
+
+    # State C: has keys but no signals yet — show dashboard with welcome nudge
+    # (handled inside _render_dashboard with a subtle banner)
+
     return _render_dashboard(user, project, usage, limits, keys, usage_pct,
                              agents_data, mcp_servers_data, signal_volume,
                              signal_types, hourly_volume, ws_key)
@@ -209,21 +224,31 @@ async def create_key(request: Request):
     except Exception:
         pass
 
+    # If onboarding flow, redirect back with key in query param
+    onboarding = form.get("onboarding", "")
+    if onboarding == "1":
+        from urllib.parse import quote
+        return RedirectResponse(f"/dashboard?new_key={quote(plaintext)}", status_code=302)
+
     # Show the key once
     return HTMLResponse(f"""<!DOCTYPE html>
 <html><head><title>API Key Created</title>
+<meta name="referrer" content="no-referrer">
 <style>
 body {{ background: #0d1117; color: #e6edf3; font-family: system-ui; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }}
 .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 2rem; max-width: 600px; width: 90%; }}
 h2 {{ color: #38bdf8; margin-top: 0; }}
-.key {{ background: #0d1117; border: 1px solid #38bdf8; border-radius: 8px; padding: 1rem; font-family: monospace; font-size: 0.9rem; word-break: break-all; margin: 1rem 0; }}
+.key {{ background: #0d1117; border: 1px solid #38bdf8; border-radius: 8px; padding: 1rem; font-family: monospace; font-size: 0.9rem; word-break: break-all; margin: 1rem 0; user-select: all; }}
 .warn {{ color: #f59e0b; font-size: 0.9rem; }}
 a {{ color: #38bdf8; text-decoration: none; }}
+.copy-btn {{ background: #38bdf8; color: #0d1117; border: none; padding: 0.5rem 1.25rem; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9rem; margin-top: 0.5rem; }}
+.copy-btn:hover {{ background: #7dd3fc; }}
 </style></head><body>
 <div class="card">
 <h2>API Key Created</h2>
 <p>Copy this key now — it won't be shown again.</p>
 <div class="key">{plaintext}</div>
+<button class="copy-btn" onclick="navigator.clipboard.writeText('{plaintext}').then(()=>{{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy Key',2000)}})">Copy Key</button>
 <p class="warn">Store this securely. Use it as: Authorization: Bearer {plaintext[:16]}...</p>
 <p><a href="/dashboard">Back to Dashboard</a></p>
 </div></body></html>""")
@@ -305,6 +330,122 @@ p { color: #8b949e; margin-bottom: 2rem; }
 <p>Cognitive infrastructure for AI agents.<br>Sign in to manage your Vigil instance.</p>
 <a href="/auth/login" class="btn">Sign in with GitHub</a>
 </div></body></html>""")
+
+
+# ── Onboarding flows ────────────────────────────────────────
+
+_ONBOARDING_CSS = """
+body { background: #050506; color: #e6edf3; font-family: 'Inter', system-ui, sans-serif; margin: 0; }
+.ob-wrap { display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 2rem; }
+.ob-card { background: #0d0d0e; border: 1px solid #21262d; border-radius: 16px; padding: 2.5rem; max-width: 640px; width: 100%; }
+.ob-card h1 { color: #38bdf8; margin: 0 0 0.25rem 0; font-size: 1.5rem; }
+.ob-card .subtitle { color: #8b949e; margin: 0 0 2rem 0; font-size: 0.95rem; }
+.ob-steps { display: flex; gap: 0.5rem; margin-bottom: 2rem; }
+.ob-step { flex: 1; height: 4px; border-radius: 2px; background: #21262d; }
+.ob-step.active { background: #38bdf8; }
+.ob-step.done { background: #4ade80; }
+.ob-label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.75rem; }
+.ob-input { width: 100%; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 0.75rem 1rem; color: #e6edf3; font-size: 0.95rem; box-sizing: border-box; outline: none; }
+.ob-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56,189,248,0.15); }
+.ob-btn { display: inline-block; background: #38bdf8; color: #0d1117; border: none; padding: 0.75rem 1.5rem; border-radius: 8px; font-weight: 600; font-size: 0.95rem; cursor: pointer; margin-top: 1rem; }
+.ob-btn:hover { background: #7dd3fc; }
+.ob-btn-ghost { background: transparent; border: 1px solid #30363d; color: #e6edf3; }
+.ob-btn-ghost:hover { border-color: #38bdf8; color: #38bdf8; }
+.ob-key { background: #0d1117; border: 1px solid #38bdf8; border-radius: 8px; padding: 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; word-break: break-all; margin: 0.75rem 0; user-select: all; }
+.ob-code { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 1rem; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; overflow-x: auto; margin: 0.75rem 0; line-height: 1.6; }
+.ob-code .dim { color: #484f58; }
+.ob-code .accent { color: #38bdf8; }
+.ob-code .green { color: #4ade80; }
+.ob-warn { color: #f59e0b; font-size: 0.85rem; margin-top: 0.5rem; }
+.ob-section { margin-bottom: 1.75rem; }
+.ob-copy { background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 0.3rem 0.75rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; float: right; }
+.ob-copy:hover { border-color: #38bdf8; color: #38bdf8; }
+.ob-success { text-align: center; padding: 2rem 0; }
+.ob-success h2 { color: #4ade80; font-size: 1.3rem; margin-bottom: 0.5rem; }
+.ob-success p { color: #8b949e; }
+"""
+
+
+def _render_onboarding_create_key(user):
+    """State A: new user, no keys — show key creation form."""
+    return f"""<!DOCTYPE html>
+<html><head><title>Get Started — Vigil Cloud</title>
+<meta name="referrer" content="no-referrer">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>{_ONBOARDING_CSS}</style></head><body>
+<div class="ob-wrap"><div class="ob-card">
+<h1>Welcome to Vigil, {user['name'] or 'there'}</h1>
+<p class="subtitle">Let's connect your first agent in under a minute.</p>
+
+<div class="ob-steps">
+  <div class="ob-step active"></div>
+  <div class="ob-step"></div>
+  <div class="ob-step"></div>
+</div>
+
+<div class="ob-label">Step 1 — Create your API key</div>
+<p style="color:#8b949e;font-size:0.9rem;margin:0 0 1rem 0;">
+  This key authenticates your agents with Vigil Cloud. You'll use it as a Bearer token.
+</p>
+
+<form method="POST" action="/dashboard/keys/create">
+  <input type="hidden" name="onboarding" value="1">
+  <input type="text" name="key_name" class="ob-input" placeholder="Key name (e.g. my-project)" value="default">
+  <button type="submit" class="ob-btn">Create API Key</button>
+</form>
+</div></div></body></html>"""
+
+
+def _render_onboarding_connect(user, new_key, app_url):
+    """State B: key just created — show key + connect instructions + test signal."""
+    return f"""<!DOCTYPE html>
+<html><head><title>Connect Your Agent — Vigil Cloud</title>
+<meta name="referrer" content="no-referrer">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>{_ONBOARDING_CSS}</style></head><body>
+<div class="ob-wrap"><div class="ob-card">
+<h1>Your API Key</h1>
+<p class="subtitle">Copy it now — it won't be shown again.</p>
+
+<div class="ob-steps">
+  <div class="ob-step done"></div>
+  <div class="ob-step active"></div>
+  <div class="ob-step"></div>
+</div>
+
+<div class="ob-section">
+  <div class="ob-key" id="key-display">{new_key}</div>
+  <button class="ob-btn" style="margin-top:0.5rem" onclick="navigator.clipboard.writeText('{new_key}').then(()=>{{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy Key',2000)}})">Copy Key</button>
+  <p class="ob-warn">Store this securely. It won't be shown again.</p>
+</div>
+
+<div class="ob-section">
+  <div class="ob-label">Step 2 — Add to your agent</div>
+  <button class="ob-copy" onclick="navigator.clipboard.writeText('export VIGIL_API_URL={app_url}/api\\nexport VIGIL_API_KEY={new_key}').then(()=>{{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)}})">Copy</button>
+  <div class="ob-code"><span class="dim">export</span> <span class="accent">VIGIL_API_URL</span>=<span class="green">{app_url}/api</span>
+<span class="dim">export</span> <span class="accent">VIGIL_API_KEY</span>=<span class="green">{new_key}</span></div>
+
+  <p style="color:#8b949e;font-size:0.85rem;margin:0.75rem 0 0.5rem 0;">Or test with curl:</p>
+  <button class="ob-copy" onclick="navigator.clipboard.writeText(`curl -X POST {app_url}/api/signal -H 'Authorization: Bearer {new_key}' -H 'Content-Type: application/json' -d '${{{{\"from_agent\":\"test\",\"content\":\"Hello from Vigil!\"}}}}'`).then(()=>{{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000)}})">Copy</button>
+  <div class="ob-code"><span class="dim">curl -X POST</span> <span class="green">{app_url}/api/signal</span> \\
+  <span class="dim">-H</span> <span class="accent">'Authorization: Bearer {new_key[:20]}...'</span> \\
+  <span class="dim">-H</span> 'Content-Type: application/json' \\
+  <span class="dim">-d</span> '{{"from_agent":"test","content":"Hello!"}}'</div>
+</div>
+
+<div class="ob-section">
+  <div class="ob-label">Step 3 — Send a test signal</div>
+  <p style="color:#8b949e;font-size:0.85rem;margin:0 0 0.75rem 0;">
+    Or just click below to verify everything works:
+  </p>
+  <form method="POST" action="/dashboard/test-signal" style="display:inline">
+    <input type="hidden" name="content" value="Hello from Vigil! First signal connected.">
+    <button type="submit" class="ob-btn">Send Test Signal</button>
+  </form>
+  <a href="/dashboard" class="ob-btn ob-btn-ghost" style="margin-left:0.5rem;">Skip — Go to Dashboard</a>
+</div>
+
+</div></div></body></html>"""
 
 
 # ── Dashboard HTML renderer ──────────────────────────────────

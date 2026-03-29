@@ -34,6 +34,30 @@ pip install vigil-agent
 pip install vigil-agent[mcp]
 ```
 
+## 30-Second Demo
+
+See Vigil work in four commands:
+
+```bash
+pip install vigil-agent
+vigil init
+vigil signal my-agent "Hello from Vigil!"
+vigil status
+```
+
+Expected output:
+
+```
+Current Awareness
+─────────────────
+  Agents:  my-agent (1 signal)
+  Latest:  "Hello from Vigil!" (just now)
+  Frame:   default
+  Status:  active — 1 unacknowledged signal
+```
+
+That's it — your agent has awareness. Read on for the full quickstart with daemon, handoff, and MCP server.
+
 ## Quickstart
 
 ```bash
