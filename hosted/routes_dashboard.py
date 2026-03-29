@@ -105,7 +105,57 @@ async def dashboard(request: Request):
     if limits["signal_limit"] > 0:
         usage_pct = min(100, int(usage["signal_count"] / limits["signal_limit"] * 100))
 
-    return _render_dashboard(user, project, usage, limits, keys, usage_pct)
+    # Fetch additional analytics data
+    agents_data = []
+    mcp_servers_data = []
+    signal_volume = []
+    if project:
+        from hosted.tenant import get_tenant_state
+        try:
+            tenant_state = get_tenant_state(project["id"])
+            tdb = tenant_state["db"]
+
+            # Agent activity
+            agents_data = tdb.query_all(
+                "SELECT from_agent, COUNT(*) as signal_count, "
+                "MAX(created_at) as last_seen, MIN(created_at) as first_seen "
+                "FROM signals GROUP BY from_agent ORDER BY last_seen DESC LIMIT 10"
+            )
+
+            # MCP server health
+            mcp_servers_data = []
+            mcp_srvs = tdb.query_all("SELECT DISTINCT server_name FROM mcp_events ORDER BY server_name")
+            for srv_row in mcp_srvs:
+                srv = srv_row["server_name"]
+                stats = tdb.query_one(
+                    "SELECT COUNT(*) as total_calls, "
+                    "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as total_errors, "
+                    "AVG(duration_ms) as avg_ms, MAX(created_at) as last_seen "
+                    "FROM mcp_events WHERE server_name = ? AND created_at > datetime('now', '-24 hours')",
+                    (srv,),
+                )
+                total = stats["total_calls"] or 0
+                errors = stats["total_errors"] or 0
+                error_rate = errors / total if total else 0
+                status_label = "unhealthy" if error_rate > 0.5 else ("degraded" if error_rate > 0.1 else "healthy")
+                mcp_servers_data.append({
+                    "name": srv, "status": status_label,
+                    "calls": total, "errors": errors,
+                    "avg_ms": round(stats["avg_ms"] or 0, 1),
+                    "last_seen": stats["last_seen"],
+                })
+
+            # Signal volume — last 7 days, daily buckets
+            signal_volume = tdb.query_all(
+                "SELECT strftime('%Y-%m-%d', created_at) as day, COUNT(*) as count "
+                "FROM signals WHERE created_at > datetime('now', '-7 days') "
+                "GROUP BY day ORDER BY day"
+            )
+        except Exception:
+            pass
+
+    return _render_dashboard(user, project, usage, limits, keys, usage_pct,
+                             agents_data, mcp_servers_data, signal_volume)
 
 
 @router.post("/dashboard/keys/create")
@@ -211,8 +261,13 @@ p { color: #8b949e; margin-bottom: 2rem; }
 
 # ── Dashboard HTML renderer ──────────────────────────────────
 
-def _render_dashboard(user, project, usage, limits, keys, usage_pct):
+def _render_dashboard(user, project, usage, limits, keys, usage_pct,
+                      agents_data=None, mcp_servers_data=None, signal_volume=None):
     """Render the dashboard HTML inline (no template engine needed for MVP)."""
+    agents_data = agents_data or []
+    mcp_servers_data = mcp_servers_data or []
+    signal_volume = signal_volume or []
+
     # Get the first key prefix for connect instructions
     first_key_prefix = keys[0]['key_prefix'] + "..." if keys else "your-api-key-here"
     has_keys = len(keys) > 0
@@ -337,6 +392,99 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct):
     </form>"""
 
     billing_html = billing_free_html if user['tier'] == 'free' else billing_paid_html
+
+    # ── Signal volume sparkline SVG ────────────────────────
+    sparkline_svg = ""
+    if signal_volume:
+        values = [v["count"] for v in signal_volume]
+        max_val = max(values) if values else 1
+        w, h = 160, 36
+        points = []
+        for i, v in enumerate(values):
+            x = (i / max(len(values) - 1, 1)) * w
+            y = h - (v / max_val * h * 0.85) - 2
+            points.append(f"{x:.1f},{y:.1f}")
+        polyline = " ".join(points)
+        # Area fill
+        area_points = f"0,{h} " + polyline + f" {w},{h}"
+        sparkline_svg = f'''<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="display:block;margin-top:0.5rem;">
+          <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#38bdf8" stop-opacity="0.3"/><stop offset="100%" stop-color="#38bdf8" stop-opacity="0.02"/></linearGradient></defs>
+          <polygon points="{area_points}" fill="url(#sg)"/>
+          <polyline points="{polyline}" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>'''
+        total_7d = sum(values)
+    else:
+        total_7d = 0
+
+    # ── Agents section HTML ────────────────────────────────
+    agents_html = ""
+    if agents_data:
+        agents_rows = ""
+        for a in agents_data:
+            last = str(a.get("last_seen", ""))[:16]
+            agents_rows += f'''<tr class="table-row">
+                <td><code class="inline-code">{a["from_agent"]}</code></td>
+                <td style="font-variant-numeric:tabular-nums">{a["signal_count"]}</td>
+                <td class="muted">{last}</td>
+            </tr>'''
+        agents_html = f"""
+    <div class="section">
+        <div class="section-header">
+            <h2 class="section-title">Agents</h2>
+            <div class="section-rule"></div>
+        </div>
+        <table>
+            <thead><tr><th>Agent</th><th>Signals</th><th>Last Seen</th></tr></thead>
+            <tbody>{agents_rows}</tbody>
+        </table>
+    </div>"""
+
+    # ── MCP Health section HTML ────────────────────────────
+    mcp_html = ""
+    if mcp_servers_data:
+        mcp_cards = ""
+        for srv in mcp_servers_data:
+            status = srv["status"]
+            if status == "healthy":
+                badge_bg = "rgba(74,222,128,0.12)"
+                badge_color = "#4ade80"
+                badge_border = "rgba(74,222,128,0.3)"
+            elif status == "degraded":
+                badge_bg = "rgba(251,191,36,0.12)"
+                badge_color = "#fbbf24"
+                badge_border = "rgba(251,191,36,0.3)"
+            else:
+                badge_bg = "rgba(248,113,113,0.12)"
+                badge_color = "#f87171"
+                badge_border = "rgba(248,113,113,0.3)"
+
+            mcp_cards += f'''
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1.25rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+            <div>
+                <div style="display:flex;align-items:center;gap:0.625rem;margin-bottom:0.35rem;">
+                    <code class="inline-code" style="font-size:0.85rem;">{srv["name"]}</code>
+                    <span style="background:{badge_bg};color:{badge_color};border:1px solid {badge_border};padding:0.1rem 0.5rem;border-radius:4px;font-size:0.65rem;font-family:'JetBrains Mono',monospace;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">{status}</span>
+                </div>
+                <div class="muted" style="font-size:0.78rem;">Last seen: {str(srv["last_seen"] or "never")[:16]}</div>
+            </div>
+            <div style="display:flex;gap:1.5rem;font-size:0.8rem;">
+                <div style="text-align:center"><div style="color:var(--accent);font-weight:700;font-size:1.1rem;font-variant-numeric:tabular-nums;">{srv["calls"]:,}</div><div class="muted" style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.06em;">calls</div></div>
+                <div style="text-align:center"><div style="color:{"#f87171" if srv["errors"] else "var(--muted)"};font-weight:700;font-size:1.1rem;font-variant-numeric:tabular-nums;">{srv["errors"]}</div><div class="muted" style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.06em;">errors</div></div>
+                <div style="text-align:center"><div style="color:var(--bright);font-weight:700;font-size:1.1rem;font-variant-numeric:tabular-nums;">{srv["avg_ms"]}ms</div><div class="muted" style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.06em;">avg</div></div>
+            </div>
+        </div>'''
+
+        mcp_html = f"""
+    <div class="section">
+        <div class="section-header">
+            <h2 class="section-title">MCP Server Health</h2>
+            <div class="section-rule"></div>
+        </div>
+        <p class="section-desc">Monitored via <code class="inline-code" style="font-size:0.75rem;">mcpwatch</code> — last 24 hours.</p>
+        <div style="display:flex;flex-direction:column;gap:0.75rem;">
+            {mcp_cards}
+        </div>
+    </div>"""
 
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="en"><head><title>Dashboard — Vigil Cloud</title>
@@ -966,8 +1114,9 @@ thead th {{
       <div class="stat-value" style="font-size:1.4rem">{user['tier'].title()}</div>
     </div>
     <div class="stat-card">
-      <div class="stat-label">Project</div>
-      <div class="stat-value" style="font-size:1.1rem;line-height:1.3">{project['name'] if project else 'None'}</div>
+      <div class="stat-label">7-Day Volume</div>
+      <div class="stat-value">{total_7d:,}</div>
+      {sparkline_svg}
     </div>
   </div>
 
@@ -1003,6 +1152,10 @@ thead th {{
     </div>
     {activity_html}
   </div>
+
+  {agents_html}
+
+  {mcp_html}
 
   <!-- API Keys -->
   <div class="section">
