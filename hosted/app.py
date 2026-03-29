@@ -5,10 +5,13 @@ routes to per-tenant SQLite database, meters usage, enforces tier limits.
 """
 
 import os
+import asyncio
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Query
+from fastapi import FastAPI, HTTPException, Depends, Request, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
+
+from vigil.broadcast import TenantBroadcasters
 
 from vigil.signals import SignalType
 from vigil.api import (
@@ -113,6 +116,9 @@ def create_hosted_app() -> FastAPI:
     from hosted.billing import router as billing_router
     app.include_router(billing_router)
 
+    # Tenant-scoped WebSocket broadcaster
+    _tenant_broadcasters = TenantBroadcasters()
+
     # ── Background daemon ──────────────────────────────────────
 
     from hosted.daemon import HostedDaemon
@@ -163,6 +169,9 @@ def create_hosted_app() -> FastAPI:
         # Meter
         pdb = get_platform_db()
         pdb.increment_usage(tenant.project_id, "signal_count")
+
+        # Broadcast to WebSocket clients
+        await _tenant_broadcasters.broadcast(tenant.project_id, sig.to_dict())
 
         return {
             "signal_id": sig.id,
@@ -448,5 +457,50 @@ def create_hosted_app() -> FastAPI:
             "p99": round(durations[min(int(n * 0.99), n - 1)], 2),
             "count": n, "hours": hours,
         }
+
+    # ── WebSocket (tenant-scoped) ────────────────────────────
+
+    @app.websocket("/ws/signals")
+    async def ws_signals(websocket: WebSocket, key: str = "", agent: str = ""):
+        """Real-time signal stream via WebSocket.
+
+        Connect: wss://app.vigil-agent.com/ws/signals?key=vgl_xxx&agent=my-agent
+        Sends JSON signal objects as they're emitted.
+        """
+        if not key:
+            await websocket.close(code=4001, reason="Missing API key")
+            return
+
+        pdb = get_platform_db()
+        resolved = pdb.resolve_api_key(key)
+        if not resolved:
+            await websocket.close(code=4001, reason="Invalid API key")
+            return
+
+        project_id = resolved["project_id"]
+        broadcaster = _tenant_broadcasters.get(project_id)
+        await broadcaster.connect(websocket, agent_filter=agent)
+
+        try:
+            # Send recent signals as initial payload
+            state = get_tenant_state(project_id)
+            recent = state["bus"].read(hours=1, limit=10)
+            if agent:
+                recent = [s for s in recent if s.from_agent == agent]
+            for s in recent:
+                await websocket.send_json(s.to_dict())
+
+            # Keep alive
+            while True:
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                except asyncio.TimeoutError:
+                    await websocket.send_json({"type": "ping"})
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            await broadcaster.disconnect(websocket)
 
     return app

@@ -136,7 +136,7 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [ ] Admin override: manual frame switching, signal injection
 
 ### Advanced Dashboard
-- [ ] Real-time signal stream (WebSocket, not htmx polling)
+- [x] Real-time signal stream (WebSocket at /ws/signals, replaces htmx polling)
 - [ ] Signal analytics: volume over time, type distribution, agent activity heatmap
 - [ ] Handoff timeline visualization (Gantt-style)
 - [ ] Frame switching UI (click to change active frame)

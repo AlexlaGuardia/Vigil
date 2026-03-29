@@ -23,11 +23,13 @@ from typing import Optional, List
 
 from pathlib import Path as FilePath
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Query
+from fastapi import FastAPI, HTTPException, Depends, Request, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+
+from vigil.broadcast import SignalBroadcaster
 
 from vigil.db import VigilDB
 from vigil.signals import SignalBus, SignalType
@@ -126,6 +128,10 @@ def create_app(
 
     if state is None:
         state = build_state(db_path, default_frame)
+
+    # Signal broadcaster for WebSocket clients
+    broadcaster = SignalBroadcaster()
+    state["broadcaster"] = broadcaster
 
     app = FastAPI(
         title="Vigil",
@@ -289,6 +295,10 @@ def create_app(
             signal_type=req.signal_type,
             to_agent=req.to_agent,
         )
+
+        # Broadcast to WebSocket clients
+        await broadcaster.broadcast(sig.to_dict())
+
         return {
             "signal_id": sig.id,
             "type": sig.signal_type.value,
@@ -443,6 +453,56 @@ def create_app(
                 await asyncio.sleep(2)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    @app.websocket("/ws/signals")
+    async def ws_signals(websocket: WebSocket, agent: str = ""):
+        """WebSocket stream of real-time signals.
+
+        Connect: ws://host:port/ws/signals?agent=my-agent
+        Auth: Pass API key as query param ?key=xxx or first message {"key": "xxx"}
+
+        Messages are JSON signal objects pushed as they're emitted.
+        """
+        # Auth check
+        ws_key = websocket.query_params.get("key", "")
+        if key and ws_key != key:
+            # Wait for auth message
+            await websocket.accept()
+            try:
+                auth_msg = await asyncio.wait_for(websocket.receive_json(), timeout=5)
+                if auth_msg.get("key") != key:
+                    await websocket.send_json({"error": "Invalid API key"})
+                    await websocket.close(code=4001)
+                    return
+            except Exception:
+                await websocket.close(code=4001)
+                return
+            agent_filter = auth_msg.get("agent", agent)
+            await broadcaster.connect(websocket, agent_filter=agent_filter)
+        else:
+            await broadcaster.connect(websocket, agent_filter=agent)
+
+        try:
+            # Send recent signals as initial payload
+            recent = state["bus"].read(hours=1, limit=10)
+            if agent:
+                recent = [s for s in recent if s.from_agent == agent]
+            for s in recent:
+                await websocket.send_json(s.to_dict())
+
+            # Keep connection alive — wait for disconnect
+            while True:
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=30)
+                except asyncio.TimeoutError:
+                    # Send ping to keep alive
+                    await websocket.send_json({"type": "ping"})
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            await broadcaster.disconnect(websocket)
 
     @app.get("/triggers", dependencies=[Depends(verify_key)])
     async def triggers_list(enabled_only: bool = Query(True)):
