@@ -28,24 +28,28 @@ TIERS = {
         "agent_limit": 2,
         "project_limit": 1,
         "price_monthly": 0,
+        "rate_limit_per_min": 10,
     },
     "pro": {
         "signal_limit": 50_000,
         "agent_limit": 0,  # unlimited
         "project_limit": 1,
         "price_monthly": 900,  # $9 in cents
+        "rate_limit_per_min": 60,
     },
     "team": {
         "signal_limit": 200_000,
         "agent_limit": 0,
         "project_limit": 5,
         "price_monthly": 2900,
+        "rate_limit_per_min": 300,
     },
     "enterprise": {
         "signal_limit": 0,  # unlimited
         "agent_limit": 0,
         "project_limit": 0,
         "price_monthly": 9900,
+        "rate_limit_per_min": 0,  # unlimited
     },
 }
 

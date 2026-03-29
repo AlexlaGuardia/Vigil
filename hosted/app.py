@@ -23,6 +23,7 @@ from vigil.api import (
 from hosted.platform_db import PlatformDB
 from hosted.tenant import get_tenant_state
 from hosted.config import get_tier_limits, DATA_DIR
+from hosted.rate_limit import RateLimiter
 
 
 # ── Platform DB singleton ────────────────────────────────────────
@@ -97,6 +98,23 @@ def check_signal_limit(tenant: TenantContext):
         )
 
 
+def check_rate_limit(tenant: TenantContext, rate_limiter: RateLimiter):
+    """Check per-minute rate limit for this tenant's tier."""
+    limits = get_tier_limits(tenant.tier)
+    rpm = limits.get("rate_limit_per_min", 0)
+    allowed, info = rate_limiter.check(tenant.project_id, rpm)
+    if not allowed:
+        raise HTTPException(
+            429,
+            detail=f"Rate limit exceeded ({rpm} requests/min). Retry after {info['retry_after']}s.",
+            headers={
+                "Retry-After": str(info["retry_after"]),
+                "X-RateLimit-Limit": str(info["limit"]),
+                "X-RateLimit-Remaining": str(info["remaining"]),
+            },
+        )
+
+
 # ── App factory ──────────────────────────────────────────────────
 
 def create_hosted_app() -> FastAPI:
@@ -118,6 +136,9 @@ def create_hosted_app() -> FastAPI:
 
     # Tenant-scoped WebSocket broadcaster
     _tenant_broadcasters = TenantBroadcasters()
+
+    # Per-tenant rate limiter
+    _rate_limiter = RateLimiter(window_seconds=60)
 
     # ── Background daemon ──────────────────────────────────────
 
@@ -146,6 +167,7 @@ def create_hosted_app() -> FastAPI:
 
     @app.post("/api/compile")
     async def compile(tenant: TenantContext = Depends(resolve_tenant)):
+        check_rate_limit(tenant, _rate_limiter)
         pdb = get_platform_db()
         pdb.increment_usage(tenant.project_id, "compile_count")
         tenant.state["compiler"].synthesize()
@@ -153,6 +175,7 @@ def create_hosted_app() -> FastAPI:
 
     @app.post("/api/signal")
     async def signal(req: SignalRequest, tenant: TenantContext = Depends(resolve_tenant)):
+        check_rate_limit(tenant, _rate_limiter)
         check_signal_limit(tenant)
         try:
             SignalType(req.signal_type)

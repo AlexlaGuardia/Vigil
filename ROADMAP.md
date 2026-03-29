@@ -125,7 +125,7 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [x] Tier enforcement: 110% soft cap, 429 with upgrade message
 - [x] Multi-tenant daemon: background compile cycle (120s), active tenants only
 - [ ] Team invites: email-based, role-based (admin/member/viewer)
-- [ ] Rate limiting per tier (beyond signal count)
+- [x] Rate limiting per tier: sliding window (free=10/min, pro=60, team=300, enterprise=unlimited)
 - [x] Audit log: tracks key create/revoke, alert signals, with REST endpoint + filtering
 
 ### Policy Engine
