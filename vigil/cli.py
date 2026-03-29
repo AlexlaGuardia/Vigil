@@ -759,6 +759,163 @@ def cmd_mcp_health(args):
         print()
 
 
+def cmd_mcp_health_check(args):
+    """Probe an MCP server via stdio — verify it starts and responds.
+
+    Designed for CI/CD: starts the server process, sends MCP initialize + tools/list,
+    validates response, prints results, exits 0 (pass) or 1 (fail).
+    """
+    import subprocess
+    import json as json_mod
+    import time
+    import shlex
+
+    command = args.server_command
+    timeout = args.timeout
+    min_tools = args.min_tools
+    require_tools = [t.strip() for t in args.require.split(",") if t.strip()] if args.require else []
+
+    print(f"  MCP Health Check")
+    print(f"  Command: {command}")
+    print(f"  Timeout: {timeout}s")
+    print()
+
+    # Start server process
+    try:
+        proc = subprocess.Popen(
+            shlex.split(command),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        print(f"  FAIL: Command not found: {command}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"  FAIL: Could not start server: {e}")
+        sys.exit(1)
+
+    start_time = time.time()
+    passed = True
+    tool_names = []
+
+    try:
+        # Send MCP initialize request
+        init_req = json_mod.dumps({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "vigil-health-check", "version": "1.0"}
+            }
+        }) + "\n"
+        proc.stdin.write(init_req.encode())
+        proc.stdin.flush()
+
+        # Read response with timeout
+        import select
+        ready, _, _ = select.select([proc.stdout], [], [], timeout)
+        if not ready:
+            print(f"  FAIL: Server did not respond within {timeout}s")
+            passed = False
+        else:
+            line = proc.stdout.readline().decode().strip()
+            if not line:
+                print(f"  FAIL: Empty response from server")
+                passed = False
+            else:
+                try:
+                    resp = json_mod.loads(line)
+                    if "error" in resp:
+                        print(f"  FAIL: Server error: {resp['error']}")
+                        passed = False
+                    else:
+                        init_ms = (time.time() - start_time) * 1000
+                        server_name = resp.get("result", {}).get("serverInfo", {}).get("name", "unknown")
+                        server_version = resp.get("result", {}).get("serverInfo", {}).get("version", "?")
+                        print(f"  Server: {server_name} v{server_version}")
+                        print(f"  Initialize: {init_ms:.0f}ms")
+                except json_mod.JSONDecodeError:
+                    print(f"  FAIL: Invalid JSON response: {line[:200]}")
+                    passed = False
+
+        # Send initialized notification
+        if passed:
+            notif = json_mod.dumps({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            }) + "\n"
+            proc.stdin.write(notif.encode())
+            proc.stdin.flush()
+
+            # Send tools/list request
+            tools_req = json_mod.dumps({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {}
+            }) + "\n"
+            proc.stdin.write(tools_req.encode())
+            proc.stdin.flush()
+
+            ready, _, _ = select.select([proc.stdout], [], [], timeout)
+            if not ready:
+                print(f"  FAIL: tools/list did not respond within {timeout}s")
+                passed = False
+            else:
+                line = proc.stdout.readline().decode().strip()
+                try:
+                    resp = json_mod.loads(line)
+                    tools = resp.get("result", {}).get("tools", [])
+                    tool_names = [t.get("name", "") for t in tools]
+                    tools_ms = (time.time() - start_time) * 1000
+                    print(f"  Tools: {len(tool_names)} registered ({tools_ms:.0f}ms)")
+
+                    # Check minimum tools
+                    if min_tools > 0 and len(tool_names) < min_tools:
+                        print(f"  FAIL: Expected at least {min_tools} tools, got {len(tool_names)}")
+                        passed = False
+
+                    # Check required tools
+                    for req_tool in require_tools:
+                        if req_tool not in tool_names:
+                            print(f"  FAIL: Required tool '{req_tool}' not found")
+                            passed = False
+
+                    if tool_names and passed:
+                        for name in tool_names[:10]:
+                            print(f"    - {name}")
+                        if len(tool_names) > 10:
+                            print(f"    ... and {len(tool_names) - 10} more")
+
+                except json_mod.JSONDecodeError:
+                    print(f"  FAIL: Invalid tools/list response")
+                    passed = False
+
+    except BrokenPipeError:
+        print(f"  FAIL: Server process died unexpectedly")
+        stderr = proc.stderr.read().decode()[:500] if proc.stderr else ""
+        if stderr:
+            print(f"  stderr: {stderr}")
+        passed = False
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    total_ms = (time.time() - start_time) * 1000
+    print()
+    if passed:
+        print(f"  PASS ({total_ms:.0f}ms)")
+    else:
+        print(f"  FAIL ({total_ms:.0f}ms)")
+        sys.exit(1)
+
+
 def cmd_compact(args):
     """Run signal compaction manually."""
     from vigil.db import VigilDB
@@ -895,6 +1052,13 @@ def main():
     mcp_health_parser.add_argument("--server", "-s", default="", help="Filter by server name")
     mcp_health_parser.add_argument("--hours", type=int, default=24, help="Time window in hours (default: 24)")
 
+    # mcp-health-check
+    mcp_check_parser = subparsers.add_parser("mcp-health-check", help="Probe an MCP server — for CI/CD pipelines")
+    mcp_check_parser.add_argument("server_command", help="Command to start the MCP server (e.g. 'python -m my_server')")
+    mcp_check_parser.add_argument("--timeout", type=int, default=10, help="Timeout in seconds (default: 10)")
+    mcp_check_parser.add_argument("--min-tools", type=int, default=0, help="Minimum tools expected (default: 0)")
+    mcp_check_parser.add_argument("--require", default="", help="Comma-separated tool names that must exist")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -928,6 +1092,7 @@ def main():
         "extract": cmd_extract,
         "export": cmd_export,
         "mcp-health": cmd_mcp_health,
+        "mcp-health-check": cmd_mcp_health_check,
     }
 
     handler = commands.get(args.command)

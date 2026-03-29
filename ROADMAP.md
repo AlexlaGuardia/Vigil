@@ -158,7 +158,8 @@ Vigil is NOT a memory product. Mem0, Letta, Zep — they store facts. Vigil **co
 - [x] REST API: /mcp/health, /mcp/tools, /mcp/errors, /mcp/latency, /mcp/volume endpoints
 - [x] Multi-server view: monitor all your MCP servers from one Vigil dashboard
 - [x] Historical trends: tool usage over time, error rate trends, capacity planning
-- [ ] GitHub Action: `vigil mcp-health-check` in CI — verify MCP server responds before deploy
+- [x] `vigil mcp-health-check` CLI: probe MCP server via stdio, exit 0/1 for CI
+- [x] GitHub Action workflow: examples/github-actions/vigil-mcp-health-check.yml
 - [ ] Slack/webhook alerts when MCP server health degrades
 
 ### Pluggable Memory Backends

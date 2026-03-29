@@ -255,6 +255,7 @@ cp completions/vigil.zsh ~/.zsh/completions/_vigil
 | `vigil extract` | Auto-extract knowledge from signal patterns |
 | `vigil export` | Export state to markdown |
 | `vigil mcp-health` | MCP server health (calls, errors, latency) |
+| `vigil mcp-health-check <cmd>` | Probe MCP server in CI (exit 0/1) |
 | `vigil doctor` | Diagnose common issues |
 | `vigil version` | Show version |
 

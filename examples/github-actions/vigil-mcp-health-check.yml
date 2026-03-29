@@ -1,0 +1,70 @@
+# .github/workflows/vigil-mcp-health-check.yml
+#
+# Verify your MCP server starts and responds before deploying.
+# Uses `vigil mcp-health-check` to probe the server via stdio.
+#
+# The check:
+#   1. Installs your MCP server dependencies
+#   2. Starts the server process
+#   3. Sends MCP initialize + tools/list requests
+#   4. Validates tools exist and server responds
+#   5. Fails the pipeline if anything is wrong
+#
+# Setup:
+#   1. pip install vigil-agent[mcp] (in your CI)
+#   2. Customize the server_command below
+#   3. Optionally add --require and --min-tools flags
+
+name: MCP Health Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  mcp-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install vigil-agent[mcp]
+          pip install -e .  # Install your MCP server
+
+      - name: Check MCP server health
+        run: |
+          vigil mcp-health-check "python -m my_mcp_server" \
+            --timeout 15 \
+            --min-tools 1
+          # Options:
+          #   --timeout 15        Wait up to 15s for response
+          #   --min-tools 5       Require at least 5 tools
+          #   --require "tool_a,tool_b"  Require specific tools exist
+
+      # Optional: report results to Vigil Cloud
+      - name: Signal Vigil
+        if: always()
+        env:
+          VIGIL_URL: ${{ secrets.VIGIL_URL }}
+          VIGIL_TOKEN: ${{ secrets.VIGIL_TOKEN }}
+        run: |
+          STATUS="${{ job.status }}"
+          if [ "$STATUS" = "success" ]; then
+            MSG="MCP health check passed on ${{ github.ref_name }}"
+            TYPE="observation"
+          else
+            MSG="MCP health check FAILED on ${{ github.ref_name }}"
+            TYPE="alert"
+          fi
+          curl -sf -X POST "${VIGIL_URL:-https://app.vigil-agent.com}/api/signal" \
+            -H "Authorization: Bearer $VIGIL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"agent\":\"github-actions\",\"content\":\"$MSG\",\"signal_type\":\"$TYPE\"}" \
+            || true  # Don't fail the build if Vigil is unreachable
