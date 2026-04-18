@@ -1,6 +1,6 @@
 # Show HN Submission
 
-**Title:** Show HN: Vigil – A nervous system for AI agents (awareness daemon, session handoff, MCP server)
+**Title:** Show HN: Vigil -- Cognitive infrastructure for AI agents (awareness daemon, MCPWatch, session handoff)
 
 **URL:** https://github.com/AlexlaGuardia/Vigil
 
@@ -32,6 +32,8 @@ Storage is SQLite (zero infrastructure). Signal compaction keeps history managea
 
 I built this because I was running ~95 MCP tools across multiple AI agents (coding, trading, creative writing) and the context window overhead was killing me. Frame filtering cut my token usage by 75-85%. Session handoff means I can close a session at 2am and pick up the next morning without losing anything.
 
-v1.5.1 on PyPI: `pip install vigil-agent`. 14 modules, 268 tests, 7,500+ lines. MIT license. Zero dependencies beyond stdlib (MCP support is an optional extra). Tab completion for bash/zsh included.
+v2.2.0 on PyPI: `pip install vigil-agent`. 14 modules, 311 tests, 8,400+ lines. MIT license. Zero dependencies beyond stdlib (MCP support is an optional extra). Tab completion for bash/zsh included.
+
+New in v2.0+: MCPWatch (one-line MCP server observability with per-tool metrics, latency percentiles, error tracking, and CI health checks), WebSocket real-time signal streaming, audit logging, and rate-limited multi-tenant hosting.
 
 Happy to answer questions about the architecture, the MCP ecosystem, or how I'm using this in production.
