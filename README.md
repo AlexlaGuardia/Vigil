@@ -24,6 +24,10 @@ AI agents forget everything between sessions. They load all tools regardless of 
 
 **MCP Server** — Expose Vigil as an MCP tool server. Any Claude Code, Claude Desktop, Cursor, or Windsurf agent connects and gets persistent awareness instantly.
 
+## Articles
+
+- [Your MCP Servers Are Flying Blind (Here's How to Fix It)](https://dev.to/alexlaguardia/your-mcp-servers-are-flying-blind-heres-how-to-fix-it-3g51) — MCPWatch deep dive on Dev.to
+
 ## Install
 
 ```bash
