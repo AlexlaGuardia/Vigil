@@ -339,6 +339,118 @@ class TestInstrument:
         assert watch._total_calls == 0
 
 
+# ── Low-level Server instrumentation tests ──────────────────────
+
+class TestLowLevelServer:
+    """Verify instrument() wraps the low-level mcp.server.lowlevel.Server."""
+
+    def _build_server(self, handler_fn=None):
+        """Build a low-level Server with a registered call_tool handler."""
+        from mcp.server.lowlevel import Server
+
+        server = Server("low-level-test")
+
+        async def default_handler(name, arguments):
+            return [{"type": "text", "text": f"got {name}"}]
+
+        @server.call_tool()
+        async def call_tool(name: str, arguments: dict):
+            if handler_fn:
+                return await handler_fn(name, arguments)
+            return await default_handler(name, arguments)
+
+        return server
+
+    def _make_request(self, tool_name, arguments=None):
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        return CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(name=tool_name, arguments=arguments or {}),
+        )
+
+    def test_instrument_wraps_call_tool_dispatcher(self, tmp_db):
+        from mcp.types import CallToolRequest
+
+        server = self._build_server()
+        original_handler = server.request_handlers[CallToolRequest]
+
+        watch = instrument(server, db_path=tmp_db.path)
+        wrapped_handler = server.request_handlers[CallToolRequest]
+
+        assert wrapped_handler is not original_handler
+        assert watch.server_name == "low-level-test"
+
+    def test_low_level_records_call(self, tmp_db):
+        from mcp.types import CallToolRequest
+
+        server = self._build_server()
+        watch = instrument(server, db_path=tmp_db.path)
+
+        handler = server.request_handlers[CallToolRequest]
+        asyncio.run(handler(self._make_request("echo", {"x": 1})))
+
+        assert watch._total_calls == 1
+        assert "echo" in watch._stats
+        assert watch._stats["echo"].call_count == 1
+
+    def test_low_level_per_tool_attribution(self, tmp_db):
+        from mcp.types import CallToolRequest
+
+        server = self._build_server()
+        watch = instrument(server, db_path=tmp_db.path)
+        handler = server.request_handlers[CallToolRequest]
+
+        asyncio.run(handler(self._make_request("alpha")))
+        asyncio.run(handler(self._make_request("beta")))
+        asyncio.run(handler(self._make_request("alpha")))
+
+        assert watch._stats["alpha"].call_count == 2
+        assert watch._stats["beta"].call_count == 1
+        assert watch._total_calls == 3
+
+    def test_low_level_records_errors(self, tmp_db):
+        """Low-level Server wraps user exceptions as CallToolResult(isError=True)
+        rather than propagating. MCPWatch must detect this from the result."""
+        from mcp.types import CallToolRequest
+
+        async def boom(name, arguments):
+            raise RuntimeError("low-level boom")
+
+        server = self._build_server(handler_fn=boom)
+        watch = instrument(server, db_path=tmp_db.path)
+        handler = server.request_handlers[CallToolRequest]
+
+        # Server catches the error — handler returns normally with isError=True
+        result = asyncio.run(handler(self._make_request("crashy")))
+        assert getattr(result.root, "isError", False) is True
+
+        assert watch._total_errors == 1
+        assert watch._stats["crashy"].error_count == 1
+        assert "low-level boom" in watch._recent_errors[0].error
+
+    def test_low_level_measures_latency(self, tmp_db):
+        from mcp.types import CallToolRequest
+
+        async def slow(name, arguments):
+            await asyncio.sleep(0.05)
+            return [{"type": "text", "text": "ok"}]
+
+        server = self._build_server(handler_fn=slow)
+        watch = instrument(server, db_path=tmp_db.path)
+        handler = server.request_handlers[CallToolRequest]
+
+        asyncio.run(handler(self._make_request("slow_tool")))
+        assert watch._stats["slow_tool"].avg_ms >= 40
+
+    def test_low_level_handler_unchanged_when_call_tool_missing(self, tmp_db):
+        """Server with no @call_tool registered should not crash instrument()."""
+        from mcp.server.lowlevel import Server
+
+        server = Server("no-tools")
+        watch = instrument(server, db_path=tmp_db.path)
+        assert watch.server_name == "no-tools"
+
+
 # ── Error buffer limit test ──────────────────────────────────────
 
 class TestErrorBuffer:

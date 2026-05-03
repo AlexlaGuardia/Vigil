@@ -455,10 +455,11 @@ def instrument(
     """Instrument an MCP server with production monitoring.
 
     One-line setup that wraps all registered tools with latency tracking,
-    error detection, and alert emission.
+    error detection, and alert emission. Works with both the high-level
+    FastMCP class and the low-level mcp.server.lowlevel.Server class.
 
     Args:
-        server: FastMCP server instance
+        server: FastMCP or low-level Server instance
         server_name: Name for this server (default: server.name)
         db: VigilDB instance (for local Vigil)
         db_path: Path to Vigil DB (creates VigilDB if no db provided)
@@ -470,7 +471,7 @@ def instrument(
     Returns:
         MCPWatch instance with health(), tool_stats(), recent_errors()
 
-    Example:
+    Example (FastMCP):
         from mcp.server.fastmcp import FastMCP
         from vigil.mcpwatch import instrument
 
@@ -481,7 +482,18 @@ def instrument(
             return "results"
 
         watch = instrument(mcp)
-        # That's it. All tool calls are now monitored.
+
+    Example (low-level Server):
+        from mcp.server.lowlevel import Server
+        from vigil.mcpwatch import instrument
+
+        server = Server("my-server")
+
+        @server.call_tool()
+        async def call_tool(name, arguments):
+            return [...]
+
+        watch = instrument(server)
     """
     name = server_name or getattr(server, "name", "mcp-server")
 
@@ -499,13 +511,30 @@ def instrument(
         silence_threshold_min=silence_threshold_min,
     )
 
-    # Wrap all registered tools
+    # Wrap all registered tools — dispatches by server type
     _patch_server(server, watch)
 
     return watch
 
 
 def _patch_server(server, watch: MCPWatch):
+    """Patch a server's tool handlers with monitoring wrappers.
+
+    Dispatches by server type:
+    - FastMCP: patches server._tool_manager.tools[].fn (per-tool wrap)
+    - Low-level Server: patches request_handlers[CallToolRequest] (single dispatcher wrap)
+
+    Both paths are no-ops if the expected structure is absent.
+    """
+    if hasattr(server, "_tool_manager"):
+        _patch_fastmcp_server(server, watch)
+        return
+    if hasattr(server, "request_handlers"):
+        _patch_low_level_server(server, watch)
+        return
+
+
+def _patch_fastmcp_server(server, watch: MCPWatch):
     """Patch a FastMCP server's registered tools with monitoring wrappers.
 
     Handles the FastMCP internal structure: server._tool_manager.tools
@@ -522,3 +551,52 @@ def _patch_server(server, watch: MCPWatch):
         if fn is None:
             continue
         tool_obj.fn = watch._wrap(name, fn)
+
+
+def _patch_low_level_server(server, watch: MCPWatch):
+    """Patch a low-level mcp.server.lowlevel.Server by wrapping the
+    CallToolRequest dispatcher.
+
+    The low-level Server registers a single handler at
+    request_handlers[CallToolRequest] that dispatches to the user's
+    @server.call_tool()-registered function. We wrap that handler once
+    and extract the per-tool name from the incoming request.
+    """
+    try:
+        from mcp.types import CallToolRequest
+    except ImportError:
+        return
+
+    handlers = getattr(server, "request_handlers", None)
+    if not handlers or CallToolRequest not in handlers:
+        return
+
+    original_handler = handlers[CallToolRequest]
+
+    @functools.wraps(original_handler)
+    async def wrapped_handler(req):
+        tool_name = getattr(getattr(req, "params", None), "name", "unknown")
+        start = time.perf_counter()
+        error_msg = None
+        status = "success"
+        try:
+            result = await original_handler(req)
+            # Low-level Server catches user exceptions and returns them as
+            # CallToolResult(isError=True). Inspect result to detect errors.
+            inner = getattr(result, "root", result)
+            if getattr(inner, "isError", False):
+                status = "error"
+                content = getattr(inner, "content", None) or []
+                first = content[0] if content else None
+                error_msg = getattr(first, "text", None) or "tool returned isError=True"
+                error_msg = error_msg[:500]
+            return result
+        except Exception as e:
+            status = "error"
+            error_msg = f"{type(e).__name__}: {str(e)[:500]}"
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000
+            watch._record(tool_name, duration_ms, status, error_msg)
+
+    handlers[CallToolRequest] = wrapped_handler

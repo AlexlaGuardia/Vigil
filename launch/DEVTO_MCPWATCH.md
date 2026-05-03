@@ -20,7 +20,7 @@ That's when I built MCPWatch.
 
 ## What MCPWatch Does
 
-MCPWatch wraps any FastMCP server with a single line of code and gives you full operational visibility:
+MCPWatch wraps any Python MCP server with one line — FastMCP and low-level Server, same API:
 
 ```python
 from vigil import MCPWatch
