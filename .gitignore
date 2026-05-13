@@ -8,3 +8,6 @@ build/
 .venv/
 *.egg
 .eggs/
+
+# Cloudflare Wrangler cache
+.wrangler/

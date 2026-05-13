@@ -37,3 +37,5 @@ v2.2.0 on PyPI: `pip install vigil-agent`. 14 modules, 311 tests, 8,400+ lines. 
 New in v2.0+: MCPWatch (one-line MCP server observability with per-tool metrics, latency percentiles, error tracking, and CI health checks), WebSocket real-time signal streaming, audit logging, and rate-limited multi-tenant hosting.
 
 Happy to answer questions about the architecture, the MCP ecosystem, or how I'm using this in production.
+
+Deeper dive on MCPWatch specifically: https://dev.to/alexlaguardia/your-mcp-servers-are-flying-blind-heres-how-to-fix-it-3g51
