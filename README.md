@@ -1,16 +1,23 @@
 # Vigil
 
-**Cognitive infrastructure for AI agents.**
+**Observability and awareness infrastructure for AI agents.**
 
-Vigil gives your AI agents a nervous system — awareness of what's happening, memory of what happened, and the ability to coordinate without talking directly to each other.
+Vigil is two layers in one package:
 
-Most agent memory tools are filing cabinets. Vigil is a nervous system.
+- **MCPWatch** — one-line instrumentation for any Python MCP server (FastMCP and low-level `mcp.server.lowlevel.Server`). Catches the silent failures your agent doesn't tell you about: empty returns, `isError` responses, per-tool latency and error rates. Used in production across 95+ MCP tools.
+- **Awareness platform** — daemon-compiled context, signal protocol, session handoff, frame-based tool filtering, MCP server. The nervous system layer most agent frameworks skip.
+
+Most agent memory tools are filing cabinets. Vigil is a stethoscope and a nervous system.
 
 ## The Problem
 
-AI agents forget everything between sessions. They load all tools regardless of context (wasting 50K+ tokens). They can't coordinate across sessions or hand off work to each other. Every conversation starts cold.
+**MCP servers fail silently.** A tool returns empty content, the SDK swallows the exception, the agent treats it as "no results found" and you find out three days later from a customer ticket. There's no built-in metrics layer for MCP, no per-tool latency view, no silent-failure detector.
+
+**Agents forget everything between sessions.** They load all tools regardless of context (wasting 50K+ tokens). They can't coordinate across sessions or hand off work to each other. Every conversation starts cold.
 
 ## What Vigil Does
+
+**MCPWatch — MCP Server Instrumentation** — One line wraps any Python MCP server (FastMCP or low-level `mcp.server.lowlevel.Server`). Tracks tool-call latency (p50/p95/p99), per-tool error rates, silent failures (empty/null returns + `isError` responses), and call volume over time. REST API, CLI, and alert hooks. MIT, no config required.
 
 **Awareness Daemon** — A background process compiles system state every 90 seconds. Agents boot with pre-compiled context in <1 second. No startup latency, no "remind me what we were doing."
 
