@@ -80,3 +80,41 @@ class TestDaemon:
             assert "Frame" in content
         finally:
             os.unlink(awareness_path)
+
+
+class TestAtomicWrite:
+    """_atomic_write must never leave a partial file and must leave no temp debris."""
+
+    def test_atomic_write_basic(self, tmp_path):
+        target = tmp_path / "AWARENESS.md"
+        VigilDaemon._atomic_write(str(target), "hello\nworld\n")
+        assert target.read_text(encoding="utf-8") == "hello\nworld\n"
+        # No leftover temp files in the directory
+        assert [p.name for p in tmp_path.iterdir()] == ["AWARENESS.md"]
+
+    def test_atomic_write_overwrites_in_place(self, tmp_path):
+        target = tmp_path / "AWARENESS.md"
+        target.write_text("OLD CONTENT", encoding="utf-8")
+        VigilDaemon._atomic_write(str(target), "NEW CONTENT")
+        assert target.read_text(encoding="utf-8") == "NEW CONTENT"
+        assert len(list(tmp_path.iterdir())) == 1
+
+    def test_atomic_write_handles_unicode(self, tmp_path):
+        target = tmp_path / "AWARENESS.md"
+        VigilDaemon._atomic_write(str(target), "frame → copy ✓ café")
+        assert target.read_text(encoding="utf-8") == "frame → copy ✓ café"
+
+    def test_atomic_write_preserves_old_file_on_failure(self, tmp_path, monkeypatch):
+        target = tmp_path / "AWARENESS.md"
+        target.write_text("GOOD", encoding="utf-8")
+
+        def boom(*a, **k):
+            raise OSError("simulated rename failure")
+
+        monkeypatch.setattr(os, "replace", boom)
+        with pytest.raises(OSError):
+            VigilDaemon._atomic_write(str(target), "PARTIAL")
+
+        # Original file untouched, and the temp file was cleaned up
+        assert target.read_text(encoding="utf-8") == "GOOD"
+        assert [p.name for p in tmp_path.iterdir()] == ["AWARENESS.md"]

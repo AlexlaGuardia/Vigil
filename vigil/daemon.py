@@ -11,8 +11,10 @@ Usage:
     # Or: daemon.start()  # Non-blocking (thread)
 """
 
+import os
 import time
 import logging
+import tempfile
 import threading
 from typing import Optional, Callable
 
@@ -191,7 +193,31 @@ class VigilDaemon:
 ## Recent Signals ({context.get('recent_signals', 0)} in last hour)
 {signals_str}
 """
-            with open(self.awareness_file, "w") as f:
-                f.write(content)
+            self._atomic_write(self.awareness_file, content)
         except Exception as e:
             log.error(f"Awareness file write error: {e}")
+
+    @staticmethod
+    def _atomic_write(path: str, content: str):
+        """Write a file atomically: a crash or kill mid-write leaves the old
+        file intact rather than a truncated one.
+
+        AWARENESS.md is read by every interface on boot, so a partial write
+        would poison every session that loads it. We write to a temp file in
+        the same directory, fsync it, then os.replace() — an atomic rename on
+        POSIX — so readers only ever see a complete file.
+        """
+        directory = os.path.dirname(os.path.abspath(path)) or "."
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".vigil-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise

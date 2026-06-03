@@ -357,3 +357,32 @@ class TestCompact:
         r = await client.post("/compact", params={"dry_run": True})
         assert r.status_code == 200
         assert r.json()["dry_run"] is True
+
+
+class TestMCPSilent:
+    @pytest.mark.anyio
+    async def test_silent_endpoint(self, client, db):
+        from vigil.mcpwatch import MCPWatch
+        w = MCPWatch(server_name="srv", db=db)
+        w._record("search", 10.0, "silent", None)
+        w._record("search", 10.0, "success", None)
+        r = await client.get("/mcp/silent")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["count"] == 1
+        assert data["silent_failures"][0]["tool_name"] == "search"
+
+    @pytest.mark.anyio
+    async def test_health_reports_silent(self, client, db):
+        from vigil.mcpwatch import MCPWatch
+        w = MCPWatch(server_name="srv2", db=db)
+        for _ in range(2):
+            w._record("t", 10.0, "silent", None)
+        for _ in range(8):
+            w._record("t", 10.0, "success", None)
+        r = await client.get("/mcp/health", params={"server": "srv2"})
+        assert r.status_code == 200
+        srv = r.json()["servers"][0]
+        assert srv["total_silent"] == 2
+        assert srv["silent_rate"] == 0.2
+        assert srv["status"] == "degraded"

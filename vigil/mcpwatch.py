@@ -41,7 +41,7 @@ class ToolEvent:
     server_name: str
     tool_name: str
     duration_ms: float
-    status: str = "success"  # success | error
+    status: str = "success"  # success | error | silent
     error: Optional[str] = None
     created_at: Optional[datetime] = None
 
@@ -62,6 +62,7 @@ class ToolStats:
     name: str
     call_count: int = 0
     error_count: int = 0
+    silent_count: int = 0
     total_ms: float = 0.0
     min_ms: float = float("inf")
     max_ms: float = 0.0
@@ -91,7 +92,11 @@ class ToolStats:
     def error_rate(self) -> float:
         return self.error_count / self.call_count if self.call_count else 0.0
 
-    def record(self, duration_ms: float, is_error: bool = False):
+    @property
+    def silent_rate(self) -> float:
+        return self.silent_count / self.call_count if self.call_count else 0.0
+
+    def record(self, duration_ms: float, is_error: bool = False, is_silent: bool = False):
         self.call_count += 1
         self.total_ms += duration_ms
         self.min_ms = min(self.min_ms, duration_ms)
@@ -102,6 +107,8 @@ class ToolStats:
             self.durations = self.durations[-1000:]
         if is_error:
             self.error_count += 1
+        if is_silent:
+            self.silent_count += 1
 
     def to_dict(self) -> dict:
         return {
@@ -109,6 +116,8 @@ class ToolStats:
             "call_count": self.call_count,
             "error_count": self.error_count,
             "error_rate": round(self.error_rate, 4),
+            "silent_count": self.silent_count,
+            "silent_rate": round(self.silent_rate, 4),
             "avg_ms": round(self.avg_ms, 2),
             "min_ms": round(self.min_ms, 2) if self.min_ms != float("inf") else 0.0,
             "max_ms": round(self.max_ms, 2),
@@ -151,10 +160,12 @@ class MCPWatch:
         # In-memory stats (fast, no DB hit per call)
         self._stats: dict[str, ToolStats] = {}
         self._recent_errors: list[ToolEvent] = []
+        self._recent_silent: list[ToolEvent] = []
         self._started_at = datetime.now(timezone.utc)
         self._last_call_at: Optional[datetime] = None
         self._total_calls = 0
         self._total_errors = 0
+        self._total_silent = 0
 
         # Initialize DB table if local
         if self.db:
@@ -183,6 +194,77 @@ class MCPWatch:
             "CREATE INDEX IF NOT EXISTS idx_mcp_events_tool ON mcp_events(tool_name)"
         )
 
+    # ── Silent-failure detection ─────────────────────────────────
+    #
+    # A "silent failure" is a tool call that looks successful — no exception
+    # raised, no isError flag — but returns nothing usable: None, an empty or
+    # whitespace-only string, an empty list, or a content payload with no real
+    # text/data. These are the failures an agent doesn't tell you about: the
+    # model gets back an empty result and quietly hallucinates around it. This
+    # is the one signal generic MCP monitors and gateways don't surface.
+    #
+    # Detection is deliberately conservative: legitimate falsy values like 0,
+    # False, or a populated dict are NOT silent. Classification never raises —
+    # monitoring must never break the server it watches.
+
+    def _is_silent_result(self, result: Any) -> bool:
+        """Decide whether a tool's return value is a silent failure."""
+        try:
+            if result is None:
+                return True
+            if isinstance(result, str):
+                return result.strip() == ""
+            if isinstance(result, (bytes, bytearray)):
+                return len(result) == 0
+            # Content-bearing result objects (CallToolResult / ServerResult.root)
+            inner = getattr(result, "root", result)
+            if getattr(inner, "isError", False):
+                return False  # explicit error — handled by the error path
+            if hasattr(inner, "content"):
+                return self._content_is_empty(getattr(inner, "content"))
+            # dict-shaped results (some tools return raw dicts)
+            if isinstance(result, dict):
+                if result.get("isError"):
+                    return False
+                if "content" in result:
+                    return self._content_is_empty(result["content"])
+                return False  # populated dict carries data — not silent
+            if isinstance(result, (list, tuple)):
+                return self._content_is_empty(result)
+            return False
+        except Exception:
+            return False
+
+    @staticmethod
+    def _content_is_empty(content: Any) -> bool:
+        """True if a content payload carries nothing usable: None, empty, or
+        only empty/whitespace text items. Any non-text item (image, resource,
+        etc.) counts as real payload."""
+        if content is None:
+            return True
+        if isinstance(content, str):
+            return content.strip() == ""
+        if isinstance(content, (bytes, bytearray)):
+            return len(content) == 0
+        try:
+            items = list(content)
+        except TypeError:
+            return False
+        if not items:
+            return True
+        for item in items:
+            if isinstance(item, dict):
+                if item.get("type", "text") != "text":
+                    return False  # non-text content = real payload
+                text = item.get("text")
+            elif hasattr(item, "text") and getattr(item, "type", "text") == "text":
+                text = getattr(item, "text")
+            else:
+                return False  # unknown / non-text content item = real payload
+            if text is not None and str(text).strip() != "":
+                return False  # found real text → not empty
+        return True  # every item was empty text
+
     def _wrap(self, tool_name: str, original_fn: Callable) -> Callable:
         """Wrap a tool function with monitoring."""
 
@@ -194,6 +276,8 @@ class MCPWatch:
                 status = "success"
                 try:
                     result = await original_fn(*args, **kwargs)
+                    if self._is_silent_result(result):
+                        status = "silent"
                     return result
                 except Exception as e:
                     status = "error"
@@ -211,6 +295,8 @@ class MCPWatch:
                 status = "success"
                 try:
                     result = original_fn(*args, **kwargs)
+                    if self._is_silent_result(result):
+                        status = "silent"
                     return result
                 except Exception as e:
                     status = "error"
@@ -225,16 +311,19 @@ class MCPWatch:
         """Record a tool call event."""
         now = datetime.now(timezone.utc)
         is_error = status == "error"
+        is_silent = status == "silent"
 
         # Update in-memory stats
         if tool_name not in self._stats:
             self._stats[tool_name] = ToolStats(name=tool_name)
-        self._stats[tool_name].record(duration_ms, is_error)
+        self._stats[tool_name].record(duration_ms, is_error, is_silent)
 
         self._total_calls += 1
         self._last_call_at = now
         if is_error:
             self._total_errors += 1
+        if is_silent:
+            self._total_silent += 1
 
         event = ToolEvent(
             server_name=self.server_name,
@@ -251,6 +340,12 @@ class MCPWatch:
             if len(self._recent_errors) > 100:
                 self._recent_errors = self._recent_errors[-100:]
 
+        # Store silent failures in their own recent buffer (keep last 100)
+        if is_silent:
+            self._recent_silent.append(event)
+            if len(self._recent_silent) > 100:
+                self._recent_silent = self._recent_silent[-100:]
+
         # Persist to DB
         if self.db:
             try:
@@ -266,6 +361,11 @@ class MCPWatch:
         if is_error:
             self._emit_signal(
                 f"[mcpwatch/{self.server_name}] Tool error: {tool_name} — {error}",
+                signal_type="alert",
+            )
+        elif is_silent:
+            self._emit_signal(
+                f"[mcpwatch/{self.server_name}] Silent failure: {tool_name} returned an empty/null result with no error raised",
                 signal_type="alert",
             )
         elif duration_ms > self.latency_threshold_ms:
@@ -327,14 +427,15 @@ class MCPWatch:
 
         # Determine status
         error_rate = self._total_errors / self._total_calls if self._total_calls else 0.0
+        silent_rate = self._total_silent / self._total_calls if self._total_calls else 0.0
         is_silent = (
             self._last_call_at
             and (now - self._last_call_at) > timedelta(minutes=self.silence_threshold_min)
         )
 
-        if error_rate > 0.5 or is_silent:
+        if error_rate > 0.5 or silent_rate > 0.5 or is_silent:
             status = "unhealthy"
-        elif error_rate > 0.1:
+        elif error_rate > 0.1 or silent_rate > 0.1:
             status = "degraded"
         else:
             status = "healthy"
@@ -346,6 +447,8 @@ class MCPWatch:
             "total_calls": self._total_calls,
             "total_errors": self._total_errors,
             "error_rate": round(error_rate, 4),
+            "total_silent": self._total_silent,
+            "silent_rate": round(silent_rate, 4),
             "last_call_at": self._last_call_at.isoformat() if self._last_call_at else None,
             "tools_monitored": len(self._stats),
             "tools": {name: s.to_dict() for name, s in self._stats.items()},
@@ -360,6 +463,10 @@ class MCPWatch:
         """Get recent errors."""
         return [e.to_dict() for e in self._recent_errors[-limit:]]
 
+    def recent_silent(self, limit: int = 20) -> list[dict]:
+        """Get recent silent failures (empty/null returns with no error)."""
+        return [e.to_dict() for e in self._recent_silent[-limit:]]
+
     def is_silent(self) -> bool:
         """Check if the server has gone silent (no calls for threshold period)."""
         if not self._last_call_at:
@@ -370,8 +477,10 @@ class MCPWatch:
         """Reset all in-memory stats."""
         self._stats.clear()
         self._recent_errors.clear()
+        self._recent_silent.clear()
         self._total_calls = 0
         self._total_errors = 0
+        self._total_silent = 0
         self._started_at = datetime.now(timezone.utc)
         self._last_call_at = None
 
@@ -384,6 +493,7 @@ class MCPWatch:
         return self.db.query_all(
             "SELECT tool_name, COUNT(*) as call_count, "
             "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as error_count, "
+            "SUM(CASE WHEN status='silent' THEN 1 ELSE 0 END) as silent_count, "
             "AVG(duration_ms) as avg_ms, "
             "MIN(duration_ms) as min_ms, "
             "MAX(duration_ms) as max_ms "
@@ -404,6 +514,17 @@ class MCPWatch:
             (self.server_name, limit),
         )
 
+    def db_silent_failures(self, limit: int = 20) -> list[dict]:
+        """Get recent silent failures from DB (empty/null returns, no error)."""
+        if not self.db:
+            return []
+        return self.db.query_all(
+            "SELECT tool_name, duration_ms, created_at "
+            "FROM mcp_events WHERE server_name = ? AND status = 'silent' "
+            "ORDER BY created_at DESC LIMIT ?",
+            (self.server_name, limit),
+        )
+
     def db_call_volume(self, hours: int = 24, bucket_minutes: int = 60) -> list[dict]:
         """Get call volume over time (for charts)."""
         if not self.db:
@@ -412,6 +533,7 @@ class MCPWatch:
             "SELECT strftime('%Y-%m-%d %H:00', created_at) as bucket, "
             "COUNT(*) as calls, "
             "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errors, "
+            "SUM(CASE WHEN status='silent' THEN 1 ELSE 0 END) as silent, "
             "AVG(duration_ms) as avg_ms "
             "FROM mcp_events WHERE server_name = ? "
             "AND created_at > datetime('now', ?) "
@@ -582,7 +704,8 @@ def _patch_low_level_server(server, watch: MCPWatch):
         try:
             result = await original_handler(req)
             # Low-level Server catches user exceptions and returns them as
-            # CallToolResult(isError=True). Inspect result to detect errors.
+            # CallToolResult(isError=True). Inspect result to detect errors,
+            # then check for silent failures (empty/null content, no error).
             inner = getattr(result, "root", result)
             if getattr(inner, "isError", False):
                 status = "error"
@@ -590,6 +713,8 @@ def _patch_low_level_server(server, watch: MCPWatch):
                 first = content[0] if content else None
                 error_msg = getattr(first, "text", None) or "tool returned isError=True"
                 error_msg = error_msg[:500]
+            elif watch._is_silent_result(result):
+                status = "silent"
             return result
         except Exception as e:
             status = "error"

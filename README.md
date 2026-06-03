@@ -4,20 +4,20 @@
 
 Vigil is two layers in one package:
 
-- **MCPWatch** — one-line instrumentation for any Python MCP server (FastMCP and low-level `mcp.server.lowlevel.Server`). Catches the silent failures your agent doesn't tell you about: empty returns, `isError` responses, per-tool latency and error rates. Used in production across 95+ MCP tools.
+- **MCPWatch** — the silent-failure watchdog for MCP servers. One-line instrumentation for any Python MCP server (FastMCP and low-level `mcp.server.lowlevel.Server`). Gateways and dashboards already give you latency and error charts. The thing nobody catches is the call that *looks* successful but returns nothing: empty, null, or blank content with no error raised. MCPWatch flags those as a distinct `silent` status, on top of per-tool latency (p50/p95/p99), error rates, and `isError` responses. Used in production across 95+ MCP tools.
 - **Awareness platform** — daemon-compiled context, signal protocol, session handoff, frame-based tool filtering, MCP server. The nervous system layer most agent frameworks skip.
 
 Most agent memory tools are filing cabinets. Vigil is a stethoscope and a nervous system.
 
 ## The Problem
 
-**MCP servers fail silently.** A tool returns empty content, the SDK swallows the exception, the agent treats it as "no results found" and you find out three days later from a customer ticket. There's no built-in metrics layer for MCP, no per-tool latency view, no silent-failure detector.
+**MCP servers fail silently.** A tool returns empty content, the SDK swallows the exception, the agent treats it as "no results found" and you find out three days later from a customer ticket. Latency and error monitoring is now table stakes (gateways, OpenTelemetry, and FastMCP itself emit it). But none of them flag the empty-but-not-errored response — the failure mode your agent quietly hallucinates around. That gap is what MCPWatch exists to close.
 
 **Agents forget everything between sessions.** They load all tools regardless of context (wasting 50K+ tokens). They can't coordinate across sessions or hand off work to each other. Every conversation starts cold.
 
 ## What Vigil Does
 
-**MCPWatch — MCP Server Instrumentation** — One line wraps any Python MCP server (FastMCP or low-level `mcp.server.lowlevel.Server`). Tracks tool-call latency (p50/p95/p99), per-tool error rates, silent failures (empty/null returns + `isError` responses), and call volume over time. REST API, CLI, and alert hooks. MIT, no config required.
+**MCPWatch — the MCP silent-failure watchdog** — One line wraps any Python MCP server (FastMCP or low-level `mcp.server.lowlevel.Server`). Its headline job: detect silent failures — calls that return empty, null, or blank content with no error raised — and record them as a distinct `silent` status that shows up in health, per-tool stats, and alerts. It also tracks tool-call latency (p50/p95/p99), per-tool error rates, `isError` responses, and call volume over time. REST API, CLI, and alert hooks. MIT, no config required.
 
 **Awareness Daemon** — A background process compiles system state every 90 seconds. Agents boot with pre-compiled context in <1 second. No startup latency, no "remind me what we were doing."
 
@@ -313,10 +313,11 @@ watch = instrument(mcp)
 ```
 
 **What it monitors:**
-- Every tool call: name, duration, success/error
+- **Silent failures** — calls that return empty, null, or blank content with no error raised. Recorded as a distinct `silent` status, surfaced in health and stats, and alerted on. This is the headline feature.
+- Every tool call: name, duration, success / error / silent
 - Latency spikes (configurable threshold, default 5s)
-- Error patterns with full tracebacks
-- Silent failures (no calls for N minutes)
+- Error patterns with full tracebacks (including low-level `isError` responses)
+- Server silence (no calls at all for N minutes)
 
 **Three ways to use it:**
 
@@ -334,9 +335,17 @@ watch = instrument(mcp)
 **Check health anytime:**
 ```python
 health = watch.health()
-# {'server': 'my-server', 'status': 'healthy', 'total_calls': 1247,
-#  'error_rate': 0.02, 'tools': {'search': {'avg_ms': 42, 'p95_ms': 180}}}
+# {'server': 'my-server', 'status': 'degraded', 'total_calls': 1247,
+#  'total_errors': 25, 'error_rate': 0.02,
+#  'total_silent': 140, 'silent_rate': 0.112,   # <- the failures nobody else flags
+#  'tools': {'search': {'avg_ms': 42, 'p95_ms': 180, 'silent_count': 140}}}
+
+watch.recent_silent()   # the actual empty/null calls, per tool
 ```
+
+A tool that returns `""`, `None`, or `[]` with no exception is the classic MCP
+blind spot — the SDK reports success, your agent improvises around the void.
+MCPWatch turns that into a first-class signal.
 
 **CLI:**
 ```bash
@@ -344,11 +353,12 @@ vigil mcp-health              # All monitored servers
 vigil mcp-health -s my-server # Specific server
 ```
 
-**REST API (5 endpoints):**
+**REST API (6 endpoints):**
 | Endpoint | Description |
 |----------|-------------|
-| `GET /mcp/health` | Server health summary |
+| `GET /mcp/health` | Server health summary (incl. silent rate) |
 | `GET /mcp/tools` | Per-tool analytics |
+| `GET /mcp/silent` | Recent silent failures (empty/null returns) |
 | `GET /mcp/errors` | Recent errors |
 | `GET /mcp/latency` | p50/p95/p99 percentiles |
 | `GET /mcp/volume` | Call volume over time |

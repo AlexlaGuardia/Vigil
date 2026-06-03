@@ -615,6 +615,7 @@ def create_app(
             stats = db.query_one(
                 "SELECT COUNT(*) as total_calls, "
                 "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as total_errors, "
+                "SUM(CASE WHEN status='silent' THEN 1 ELSE 0 END) as total_silent, "
                 "AVG(duration_ms) as avg_ms, "
                 "MAX(duration_ms) as max_ms, "
                 "MIN(created_at) as first_seen, "
@@ -626,6 +627,7 @@ def create_app(
             tools = db.query_all(
                 "SELECT tool_name, COUNT(*) as calls, "
                 "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errors, "
+                "SUM(CASE WHEN status='silent' THEN 1 ELSE 0 END) as silent, "
                 "AVG(duration_ms) as avg_ms, MAX(duration_ms) as max_ms "
                 "FROM mcp_events WHERE server_name = ? "
                 "AND created_at > datetime('now', '-24 hours') "
@@ -634,14 +636,25 @@ def create_app(
             )
             total = stats["total_calls"] or 0
             errors = stats["total_errors"] or 0
+            silent = stats["total_silent"] or 0
             error_rate = errors / total if total else 0
+            silent_rate = silent / total if total else 0
+
+            if error_rate > 0.5 or silent_rate > 0.5:
+                status = "unhealthy"
+            elif error_rate > 0.1 or silent_rate > 0.1:
+                status = "degraded"
+            else:
+                status = "healthy"
 
             result.append({
                 "server": srv,
-                "status": "unhealthy" if error_rate > 0.5 else ("degraded" if error_rate > 0.1 else "healthy"),
+                "status": status,
                 "total_calls": total,
                 "total_errors": errors,
                 "error_rate": round(error_rate, 4),
+                "total_silent": silent,
+                "silent_rate": round(silent_rate, 4),
                 "avg_ms": round(stats["avg_ms"] or 0, 2),
                 "max_ms": round(stats["max_ms"] or 0, 2),
                 "first_seen": stats["first_seen"],
@@ -703,6 +716,30 @@ def create_app(
             )
         return {"errors": rows, "count": len(rows)}
 
+    @app.get("/mcp/silent", dependencies=[Depends(verify_key)])
+    async def mcp_silent(
+        server: str = Query(""),
+        limit: int = Query(50, ge=1, le=200),
+    ):
+        """Recent MCP silent failures — calls that returned empty/null content
+        with no error raised. The failure mode generic monitors miss."""
+        db = state["db"]
+        if server:
+            rows = db.query_all(
+                "SELECT server_name, tool_name, duration_ms, created_at "
+                "FROM mcp_events WHERE status = 'silent' AND server_name = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (server, limit),
+            )
+        else:
+            rows = db.query_all(
+                "SELECT server_name, tool_name, duration_ms, created_at "
+                "FROM mcp_events WHERE status = 'silent' "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return {"silent_failures": rows, "count": len(rows)}
+
     @app.get("/mcp/latency", dependencies=[Depends(verify_key)])
     async def mcp_latency(
         server: str = Query(""),
@@ -745,6 +782,7 @@ def create_app(
             "SELECT strftime('%Y-%m-%d %H:00', created_at) as bucket, "
             "COUNT(*) as calls, "
             "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) as errors, "
+            "SUM(CASE WHEN status='silent' THEN 1 ELSE 0 END) as silent, "
             "AVG(duration_ms) as avg_ms "
             "FROM mcp_events WHERE created_at > datetime('now', ?) "
         )

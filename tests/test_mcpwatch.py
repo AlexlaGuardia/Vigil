@@ -451,6 +451,197 @@ class TestLowLevelServer:
         assert watch.server_name == "no-tools"
 
 
+# ── Silent-failure detection tests ───────────────────────────────
+
+class _FakeResult:
+    """Stand-in for a content-bearing result object (CallToolResult-like)."""
+    def __init__(self, content, is_error=False):
+        self.content = content
+        self.isError = is_error
+
+
+class TestSilentClassifier:
+    """Unit tests for the _is_silent_result / _content_is_empty heuristics."""
+
+    @pytest.mark.parametrize("value", [
+        None,
+        "",
+        "   ",
+        "\n\t ",
+        b"",
+        [],
+        (),
+        {"content": []},
+        {"content": [{"type": "text", "text": ""}]},
+        {"content": [{"type": "text", "text": "  "}]},
+        [{"type": "text", "text": ""}],
+        _FakeResult(content=[]),
+        _FakeResult(content=[{"type": "text", "text": "   "}]),
+    ])
+    def test_silent_values(self, watch_no_db, value):
+        assert watch_no_db._is_silent_result(value) is True
+
+    @pytest.mark.parametrize("value", [
+        "result",
+        "0",
+        0,            # legit falsy — NOT silent
+        False,        # legit falsy — NOT silent
+        {"a": 1},     # populated dict — NOT silent
+        {},           # empty dict is ambiguous; treated as NOT silent (conservative)
+        [{"type": "text", "text": "hello"}],
+        {"content": [{"type": "text", "text": "hi"}]},
+        {"content": [{"type": "image", "data": "..."}]},   # non-text payload = real
+        _FakeResult(content=[{"type": "text", "text": "ok"}]),
+        _FakeResult(content=[], is_error=True),            # explicit error, not silent
+    ])
+    def test_non_silent_values(self, watch_no_db, value):
+        assert watch_no_db._is_silent_result(value) is False
+
+    def test_classifier_never_raises(self, watch_no_db):
+        class Exploding:
+            @property
+            def content(self):
+                raise RuntimeError("boom")
+        # Must swallow and default to not-silent rather than break the server
+        assert watch_no_db._is_silent_result(Exploding()) is False
+
+
+class TestSilentDetection:
+    """Silent failures flow through stats, health, buffers and DB."""
+
+    def test_wrap_sync_silent(self, watch):
+        def empty_tool():
+            return ""
+        wrapped = watch._wrap("empty", empty_tool)
+        assert wrapped() == ""
+        assert watch._total_silent == 1
+        assert watch._total_errors == 0
+        assert watch._stats["empty"].silent_count == 1
+        assert watch._stats["empty"].error_count == 0
+
+    def test_wrap_sync_non_silent(self, watch):
+        def good_tool():
+            return "data"
+        wrapped = watch._wrap("good", good_tool)
+        wrapped()
+        assert watch._total_silent == 0
+        assert watch._stats["good"].silent_count == 0
+
+    def test_wrap_async_silent(self, watch):
+        async def empty_async():
+            return None
+        wrapped = watch._wrap("empty_async", empty_async)
+        assert asyncio.run(wrapped()) is None
+        assert watch._total_silent == 1
+        assert watch._stats["empty_async"].silent_count == 1
+
+    def test_silent_not_counted_as_error(self, watch):
+        watch._record("t", 10.0, "silent", None)
+        assert watch._total_silent == 1
+        assert watch._total_errors == 0
+        assert len(watch._recent_errors) == 0
+        assert len(watch._recent_silent) == 1
+
+    def test_recent_silent(self, watch):
+        watch._record("t", 10.0, "silent", None)
+        watch._record("t", 12.0, "silent", None)
+        silent = watch.recent_silent()
+        assert len(silent) == 2
+        assert silent[0]["status"] == "silent"
+
+    def test_health_reports_silent(self, watch):
+        for _ in range(8):
+            watch._record("t", 10.0, "success", None)
+        for _ in range(2):
+            watch._record("t", 10.0, "silent", None)
+        h = watch.health()
+        assert h["total_silent"] == 2
+        assert h["silent_rate"] == 0.2
+        assert h["status"] == "degraded"  # 2/10 > 0.1
+
+    def test_health_unhealthy_on_high_silent_rate(self, watch):
+        for _ in range(6):
+            watch._record("t", 10.0, "silent", None)
+        for _ in range(4):
+            watch._record("t", 10.0, "success", None)
+        assert watch.health()["status"] == "unhealthy"  # 6/10 > 0.5
+
+    def test_db_silent_failures(self, watch):
+        watch._record("t", 10.0, "silent", None)
+        watch._record("t", 10.0, "success", None)
+        rows = watch.db_silent_failures()
+        assert len(rows) == 1
+        assert rows[0]["tool_name"] == "t"
+
+    def test_db_tool_stats_includes_silent(self, watch):
+        watch._record("t", 10.0, "silent", None)
+        watch._record("t", 10.0, "success", None)
+        stats = watch.db_tool_stats(hours=1)
+        assert stats[0]["silent_count"] == 1
+
+    def test_reset_clears_silent(self, watch):
+        watch._record("t", 10.0, "silent", None)
+        watch.reset()
+        assert watch._total_silent == 0
+        assert len(watch._recent_silent) == 0
+
+    def test_stats_to_dict_has_silent(self, watch):
+        watch._record("t", 10.0, "silent", None)
+        d = watch._stats["t"].to_dict()
+        assert d["silent_count"] == 1
+        assert d["silent_rate"] == 1.0
+
+
+class TestLowLevelSilentDetection:
+    """Low-level Server: empty content with no error -> silent."""
+
+    def _build_server(self, handler_fn):
+        from mcp.server.lowlevel import Server
+        server = Server("low-level-silent")
+
+        @server.call_tool()
+        async def call_tool(name: str, arguments: dict):
+            return await handler_fn(name, arguments)
+
+        return server
+
+    def _make_request(self, tool_name, arguments=None):
+        from mcp.types import CallToolRequest, CallToolRequestParams
+        return CallToolRequest(
+            method="tools/call",
+            params=CallToolRequestParams(name=tool_name, arguments=arguments or {}),
+        )
+
+    def test_empty_content_is_silent(self, tmp_db):
+        from mcp.types import CallToolRequest
+
+        async def returns_empty(name, arguments):
+            return []
+
+        server = self._build_server(returns_empty)
+        watch = instrument(server, db_path=tmp_db.path)
+        handler = server.request_handlers[CallToolRequest]
+        asyncio.run(handler(self._make_request("empty")))
+
+        assert watch._total_silent == 1
+        assert watch._total_errors == 0
+        assert watch._stats["empty"].silent_count == 1
+
+    def test_real_content_is_success(self, tmp_db):
+        from mcp.types import CallToolRequest
+
+        async def returns_data(name, arguments):
+            return [{"type": "text", "text": "result"}]
+
+        server = self._build_server(returns_data)
+        watch = instrument(server, db_path=tmp_db.path)
+        handler = server.request_handlers[CallToolRequest]
+        asyncio.run(handler(self._make_request("good")))
+
+        assert watch._total_silent == 0
+        assert watch._stats["good"].call_count == 1
+
+
 # ── Error buffer limit test ──────────────────────────────────────
 
 class TestErrorBuffer:
