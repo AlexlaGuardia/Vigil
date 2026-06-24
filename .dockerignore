@@ -1,0 +1,14 @@
+.git
+.github
+.wrangler
+.pytest_cache
+.venv
+dist
+build
+*.egg-info
+*.db
+__pycache__
+cover.png
+evals
+hosted
+launch
