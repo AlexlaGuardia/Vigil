@@ -23,7 +23,7 @@ from typing import Optional, List
 
 from pathlib import Path as FilePath
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, Request, Response, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -39,6 +39,38 @@ from vigil.handoff import HandoffProtocol
 from vigil.compaction import SignalCompactor
 from vigil.triggers import TriggerEngine
 from vigil.knowledge import KnowledgeBase
+
+
+class _KeyCookieMiddleware:
+    """Pure-ASGI middleware that promotes a valid `?key=` into an HttpOnly
+    `vigil_key` cookie, so a browser stays authed across dashboard navigation
+    and htmx partials. Written at the ASGI layer on purpose: Starlette's
+    BaseHTTPMiddleware (`app.middleware("http")`) is known to misbehave under
+    the trio backend, which the test suite exercises."""
+
+    def __init__(self, app, key=None):
+        self.app = app
+        self.key = key
+
+    async def __call__(self, scope, receive, send):
+        if not self.key or scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        from urllib.parse import parse_qs
+        supplied = parse_qs(scope.get("query_string", b"").decode()).get("key", [None])[0]
+        if supplied != self.key:
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                cookie = f"vigil_key={self.key}; HttpOnly; Path=/; SameSite=Lax"
+                message.setdefault("headers", []).append(
+                    (b"set-cookie", cookie.encode("latin-1"))
+                )
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
 # ── Request/Response models ───────────────────────────────────────
@@ -150,9 +182,33 @@ def create_app(
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
+    async def verify_key_ui(request: Request):
+        """Auth for the browser-facing dashboard. Same key as the API, but a
+        browser can't send an Authorization header on plain navigation — so also
+        accept the key from a `vigil_key` cookie or a `?key=` query param. A valid
+        `?key=` is promoted to a cookie by the middleware below, so later page
+        loads and htmx partials stay authed without the key trailing in every URL.
+        With no key configured (local dev) this is a no-op, same as the API."""
+        if not key:
+            return
+        if (
+            request.headers.get("Authorization", "") == f"Bearer {key}"
+            or request.headers.get("X-Vigil-Key", "") == key
+            or request.cookies.get("vigil_key") == key
+            or request.query_params.get("key") == key
+        ):
+            return
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    # Promote a valid ?key= to a cookie so the browser stays authed across
+    # navigation. Pure-ASGI (see _KeyCookieMiddleware) — BaseHTTPMiddleware
+    # (app.middleware) misbehaves under trio.
+    if key:
+        app.add_middleware(_KeyCookieMiddleware, key=key)
+
     # ── Dashboard routes ──────────────────────────────────────
 
-    @app.get("/", response_class=HTMLResponse)
+    @app.get("/", response_class=HTMLResponse, dependencies=[Depends(verify_key_ui)])
     async def dashboard(request: Request):
         """Main dashboard — live overview."""
         if not templates:
@@ -175,7 +231,7 @@ def create_app(
             "compiled_at": ctx.get("compiled_at", ""),
         })
 
-    @app.get("/dashboard/agents", response_class=HTMLResponse)
+    @app.get("/dashboard/agents", response_class=HTMLResponse, dependencies=[Depends(verify_key_ui)])
     async def dashboard_agents(request: Request):
         """Agents page."""
         if not templates:
@@ -193,7 +249,7 @@ def create_app(
             a["sessions"] = sessions
         return templates.TemplateResponse(request, "agents.html", {"agents": agents_rows})
 
-    @app.get("/dashboard/signals", response_class=HTMLResponse)
+    @app.get("/dashboard/signals", response_class=HTMLResponse, dependencies=[Depends(verify_key_ui)])
     async def dashboard_signals(request: Request, hours: int = Query(6, ge=1, le=168)):
         """Signals timeline page."""
         if not templates:
@@ -204,7 +260,7 @@ def create_app(
             "hours": hours,
         })
 
-    @app.get("/dashboard/handoffs", response_class=HTMLResponse)
+    @app.get("/dashboard/handoffs", response_class=HTMLResponse, dependencies=[Depends(verify_key_ui)])
     async def dashboard_handoffs(request: Request):
         """Handoff chain page."""
         if not templates:
@@ -219,7 +275,7 @@ def create_app(
             h["next_steps"] = _parse_json_list(h.get("next_steps"))
         return templates.TemplateResponse(request, "handoffs.html", {"handoffs": handoffs})
 
-    @app.get("/dashboard/frames", response_class=HTMLResponse)
+    @app.get("/dashboard/frames", response_class=HTMLResponse, dependencies=[Depends(verify_key_ui)])
     async def dashboard_frames(request: Request):
         """Frames map page."""
         if not templates:
@@ -233,7 +289,7 @@ def create_app(
 
     # ── htmx partials (for live updates) ──────────────────────
 
-    @app.get("/partials/signals", response_class=HTMLResponse)
+    @app.get("/partials/signals", response_class=HTMLResponse, dependencies=[Depends(verify_key_ui)])
     async def partial_signals(request: Request):
         """Signal list partial — htmx polls this for live updates."""
         if not templates:
@@ -243,7 +299,7 @@ def create_app(
             "signals": [s.to_dict() for s in recent],
         })
 
-    @app.get("/partials/awareness", response_class=HTMLResponse)
+    @app.get("/partials/awareness", response_class=HTMLResponse, dependencies=[Depends(verify_key_ui)])
     async def partial_awareness(request: Request):
         """Awareness partial — htmx polls this."""
         if not templates:

@@ -386,3 +386,38 @@ class TestMCPSilent:
         assert srv["total_silent"] == 2
         assert srv["silent_rate"] == 0.2
         assert srv["status"] == "degraded"
+
+
+class TestDashboardAuth:
+    """The browser dashboard shows the same data as the gated API, so when a key
+    is configured the HTML routes must require it too — via header, cookie, or a
+    ?key= that gets promoted to a cookie for subsequent navigation."""
+
+    @pytest.mark.anyio
+    async def test_dashboard_open_when_no_key(self, client):
+        r = await client.get("/")
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_dashboard_blocked_without_auth(self, authed_client):
+        for path in ("/", "/dashboard/agents", "/dashboard/signals",
+                     "/dashboard/handoffs", "/dashboard/frames",
+                     "/partials/signals", "/partials/awareness"):
+            r = await authed_client.get(path)
+            assert r.status_code == 401, path
+
+    @pytest.mark.anyio
+    async def test_dashboard_bearer_header(self, authed_client):
+        r = await authed_client.get("/", headers={"Authorization": "Bearer test-key-123"})
+        assert r.status_code == 200
+
+    @pytest.mark.anyio
+    async def test_dashboard_query_key_sets_cookie(self, authed_client):
+        r = await authed_client.get("/?key=test-key-123")
+        assert r.status_code == 200
+        assert r.cookies.get("vigil_key") == "test-key-123"
+
+    @pytest.mark.anyio
+    async def test_dashboard_wrong_key_rejected(self, authed_client):
+        r = await authed_client.get("/?key=nope")
+        assert r.status_code == 401

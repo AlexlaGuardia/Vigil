@@ -1,12 +1,27 @@
 """Hosted tier configuration."""
 
 import os
+import secrets
+
+ENV = os.environ.get("VIGIL_ENV", "development").lower()
 
 DATA_DIR = os.environ.get("VIGIL_DATA_DIR", "/data/vigil")
 PLATFORM_DB = os.path.join(DATA_DIR, "platform.db")
 TENANTS_DIR = os.path.join(DATA_DIR, "tenants")
 
-SESSION_SECRET = os.environ.get("VIGIL_SESSION_SECRET", "change-me-in-production")
+# Session cookies are signed with this. A shared, guessable default (the old
+# "change-me-in-production") lets anyone forge a session for a known account_id,
+# so refuse to start in production without a real secret. In dev/test, mint a
+# random per-process secret rather than a known literal — sessions just don't
+# survive a restart, which is fine locally.
+SESSION_SECRET = os.environ.get("VIGIL_SESSION_SECRET")
+if not SESSION_SECRET:
+    if ENV in ("production", "prod"):
+        raise RuntimeError(
+            "VIGIL_SESSION_SECRET must be set when VIGIL_ENV=production "
+            "(refusing to sign sessions with a default secret)."
+        )
+    SESSION_SECRET = secrets.token_urlsafe(32)
 
 GITHUB_CLIENT_ID = os.environ.get("VIGIL_GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.environ.get("VIGIL_GITHUB_CLIENT_SECRET", "")
