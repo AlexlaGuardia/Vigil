@@ -234,9 +234,11 @@ class TestFullLifecycle:
         _insert_signal(db, "cc", "deployed v1.2", 3)
         _insert_signal(db, "cc", "fixed login bug", 3)
 
-        # 10 days old dailies — becomes weekly
+        # Same-day dailies (12 days old) — compact into ONE weekly digest. Using
+        # one date keeps the two summaries in the same ISO week regardless of the
+        # run date; staggered ages (11 vs 12) can straddle a Mon/Sun week boundary.
         _insert_summary(db, "daily", "cc", "Mon: shipped features", 4, 12, 12)
-        _insert_summary(db, "daily", "cc", "Tue: bugfixes", 3, 11, 11)
+        _insert_summary(db, "daily", "cc", "Tue: bugfixes", 3, 12, 12)
 
         # 35 days old weekly — becomes monthly
         _insert_summary(db, "weekly", "cc", "Week 8 digest", 20, 38, 35)

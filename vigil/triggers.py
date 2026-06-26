@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Callable, Any
 
 from vigil.signals import Signal, SignalType, SignalBus
+from vigil.netguard import assert_public_url, UnsafeURLError
 
 log = logging.getLogger("vigil.triggers")
 
@@ -278,6 +279,15 @@ class TriggerEngine:
         url = config.get("url")
         if not url:
             return "error: no url in action_config"
+
+        # SSRF guard: the URL is operator-supplied config, but "operator" on a
+        # multi-tenant host is any account. Refuse internal/metadata targets
+        # before the request leaves the box.
+        try:
+            assert_public_url(url)
+        except UnsafeURLError as e:
+            log.warning("webhook blocked by SSRF guard: %s", e)
+            return f"webhook blocked: {e}"
 
         payload = {
             "trigger": trigger.name,

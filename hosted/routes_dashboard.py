@@ -1,5 +1,7 @@
 """Dashboard routes — auth, project overview, API key management."""
 
+import html
+
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
 
@@ -11,6 +13,27 @@ from hosted.platform_db import PlatformDB
 from hosted.config import APP_URL, get_tier_limits
 
 router = APIRouter()
+
+
+def _esc(value) -> str:
+    """HTML-escape a DB/user-supplied value before it enters dashboard markup.
+    Signal fields (from_agent, content) are attacker-controllable, so nothing
+    DB-sourced reaches the page without passing through here."""
+    return html.escape(str(value), quote=True)
+
+
+def _activity_entry_html(s: dict, accent: str) -> str:
+    """One signal row for the activity feed, with every user value escaped.
+    `accent` is a derived hex color (not user input) so it is interpolated raw."""
+    return f"""
+        <div class="activity-entry" style="border-left-color:{accent}">
+            <div class="activity-meta">
+                <span class="activity-agent">{_esc(s.get('from_agent', '?'))}</span>
+                <span class="activity-type" style="color:{accent}">{_esc(s.get('signal_type', 'observation'))}</span>
+                <span class="activity-time">{_esc(str(s.get('created_at', ''))[:19])}</span>
+            </div>
+            <div class="activity-content">{_esc(str(s.get('content', ''))[:120])}</div>
+        </div>"""
 
 
 def _require_user(request: Request, pdb: PlatformDB) -> dict:
@@ -507,17 +530,8 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct,
         activity_html = "<p class='muted' style='font-size:0.9rem;padding:0.5rem 0;'>No signals yet. Connect an agent or send a test signal above.</p>"
     else:
         for s in recent_signals:
-            stype = s.get('signal_type', 'observation')
-            accent = signal_type_color(stype)
-            activity_html += f"""
-        <div class="activity-entry" style="border-left-color:{accent}">
-            <div class="activity-meta">
-                <span class="activity-agent">{s.get('from_agent','?')}</span>
-                <span class="activity-type" style="color:{accent}">{stype}</span>
-                <span class="activity-time">{str(s.get('created_at',''))[:19]}</span>
-            </div>
-            <div class="activity-content">{s.get('content','')[:120]}</div>
-        </div>"""
+            accent = signal_type_color(s.get('signal_type', 'observation'))
+            activity_html += _activity_entry_html(s, accent)
 
     test_signal_html = "" if not has_keys else """
     <div class="section">
@@ -663,6 +677,13 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct,
     handoff: '#818cf8', summary: '#4ade80', action: '#4ade80',
   };
 
+  function esc(v) {
+    // Live signals arrive over the websocket and are user-controlled; escape
+    // before they touch innerHTML or a malicious from_agent/content executes.
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => (
+      {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
   function addSignal(s) {
     const color = typeColors[s.signal_type] || '#8b949e';
     const time = (s.created_at || '').slice(0, 19);
@@ -673,11 +694,11 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct,
     el.style.animation = 'fadeSlide 0.3s ease';
     el.innerHTML = `
       <div class="activity-meta">
-        <span class="activity-agent">${s.from_agent || '?'}</span>
-        <span class="activity-type" style="color:${color}">${s.signal_type || ''}</span>
-        <span class="activity-time">${time}</span>
+        <span class="activity-agent">${esc(s.from_agent || '?')}</span>
+        <span class="activity-type" style="color:${color}">${esc(s.signal_type || '')}</span>
+        <span class="activity-time">${esc(time)}</span>
       </div>
-      <div class="activity-content">${content}</div>`;
+      <div class="activity-content">${esc(content)}</div>`;
     feed.prepend(el);
     // Keep max 20
     while (feed.children.length > 20) feed.removeChild(feed.lastChild);
@@ -736,7 +757,7 @@ def _render_dashboard(user, project, usage, limits, keys, usage_pct,
         for a in agents_data:
             last = str(a.get("last_seen", ""))[:16]
             agents_rows += f'''<tr class="table-row">
-                <td><code class="inline-code">{a["from_agent"]}</code></td>
+                <td><code class="inline-code">{_esc(a["from_agent"])}</code></td>
                 <td style="font-variant-numeric:tabular-nums">{a["signal_count"]}</td>
                 <td class="muted">{last}</td>
             </tr>'''
@@ -1403,7 +1424,7 @@ thead th {{
   </div>
   <div class="nav-right">
     <span class="nav-username">{user['name']}</span>
-    <img class="nav-avatar" src="{user.get('avatar_url', '')}" alt="{user['name']}" />
+    <img class="nav-avatar" src="{_esc(user.get('avatar_url', ''))}" alt="{_esc(user['name'])}" />
     <a href="/auth/logout" class="nav-logout">Logout</a>
   </div>
 </nav>

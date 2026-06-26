@@ -39,6 +39,13 @@ vigil = "vigil.cli:main"
 mcp = ["mcp>=1.0.0"]
 server = ["mcp>=1.0.0", "fastapi>=0.100.0", "uvicorn>=0.20.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "anyio>=4.0"]
+# Everything the full test suite imports (core + server + hosted tiers), so CI
+# can `pip install -e ".[test]"` and run green without guessing transitive deps.
+test = [
+    "pytest>=7.0", "pytest-asyncio>=0.21", "anyio>=4.0",
+    "fastapi>=0.100.0", "uvicorn>=0.20.0", "mcp>=1.0.0",
+    "httpx>=0.24", "itsdangerous>=2.0", "pydantic>=2.0", "stripe>=5.0",
+]
 
 [tool.hatch.build]
 include = ["vigil/**", "completions/**", "examples/**"]
