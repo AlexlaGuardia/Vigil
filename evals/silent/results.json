@@ -1,0 +1,189 @@
+{
+  "summary": {
+    "recall": 1.0,
+    "fp_rate": 0.0,
+    "precision": 1.0,
+    "f1": 1.0,
+    "tp": 12,
+    "fn": 0,
+    "fp": 0,
+    "tn": 13
+  },
+  "results": [
+    {
+      "id": "none",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "tool returned nothing"
+    },
+    {
+      "id": "empty_string",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": null
+    },
+    {
+      "id": "whitespace_string",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "blank text"
+    },
+    {
+      "id": "empty_bytes",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": null
+    },
+    {
+      "id": "empty_list",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "no content items"
+    },
+    {
+      "id": "dict_empty_content",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "MCP result, zero content"
+    },
+    {
+      "id": "dict_empty_text",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "one empty text item"
+    },
+    {
+      "id": "dict_whitespace_text",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": null
+    },
+    {
+      "id": "obj_empty_content",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "CallToolResult, empty"
+    },
+    {
+      "id": "obj_empty_text",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": null
+    },
+    {
+      "id": "root_empty_content",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "ServerResult.root path"
+    },
+    {
+      "id": "list_all_empty_text",
+      "expect": true,
+      "got": true,
+      "ok": true,
+      "note": "every item blank"
+    },
+    {
+      "id": "zero",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "0 is a real result, not empty"
+    },
+    {
+      "id": "false",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "False is a real result"
+    },
+    {
+      "id": "empty_dict",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "no content key -> carries data"
+    },
+    {
+      "id": "populated_dict_zero",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "populated dict with a zero value"
+    },
+    {
+      "id": "real_text",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": null
+    },
+    {
+      "id": "dict_real_text",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": null
+    },
+    {
+      "id": "image_content",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "non-text payload = real"
+    },
+    {
+      "id": "resource_content",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "resource payload = real"
+    },
+    {
+      "id": "error_dict",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "error path, not silent"
+    },
+    {
+      "id": "error_obj",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "isError wins over empty content"
+    },
+    {
+      "id": "list_of_numbers",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "non-text items = real payload"
+    },
+    {
+      "id": "obj_real_text",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": null
+    },
+    {
+      "id": "mixed_one_real",
+      "expect": false,
+      "got": false,
+      "ok": true,
+      "note": "one real item is enough"
+    }
+  ]
+}
