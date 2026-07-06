@@ -23,3 +23,5 @@ jobs:
           pip install -e ".[test]"
       - name: Test
         run: pytest -q
+      - name: Silent-failure benchmark
+        run: python -m evals.silent.run_evals
