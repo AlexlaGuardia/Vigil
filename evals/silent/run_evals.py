@@ -14,6 +14,7 @@ Deterministic, no deps beyond vigil. Writes evals/silent/results.json.
 """
 
 import json
+import sys
 from pathlib import Path
 
 from vigil.mcpwatch import MCPWatch
@@ -75,6 +76,10 @@ def main():
                    "results": rows}, f, indent=2)
     print(f"\nWrote {RESULTS_PATH}")
 
+    # Fail closed: any missed silent (recall < 100%) or false positive (contract
+    # is 0%) is a regression. Non-zero exit so CI and pre-change runs actually gate.
+    return 1 if fails else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
