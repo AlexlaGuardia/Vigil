@@ -1,6 +1,16 @@
 # `scan-tools` — registration-time MCP tool-definition poisoning scanner
 
-**Status:** design (not implemented) · **Owner:** Vigil core · **Companion to:** MCPWatch (execution-time)
+**Status:** v1 shipped (`vigil/scantools.py`, `vigil scan-tools`, 17 tests) · **Owner:** Vigil core · **Companion to:** MCPWatch (execution-time)
+
+> **v1 landed 2026-07-11.** Content scan (full-field walk + imperative classifier lifted
+> from `defense_scanner.py`) with a JSON path in every flag, plus **rug-pull / drift
+> detection** (`fingerprint` + `detect_rug_pull`, CVE-2025-54136 class) — pin the definition
+> at approval, flag any post-approval mutation and name the changed fields. CLI:
+> `vigil scan-tools --definition <f.json> [--against <baseline.json>] [--fail-on high] [--json]`.
+> Verified on the FINDING-11 decoy case (description swears "never exports data"; exfil
+> directive in `enum[1]`) — flagged at the exact path human review + description-only scanners miss.
+> **Deferred to v2/v3 (roadmap §6 unchanged):** REST endpoints, `instrument()` auto-scan-on-register,
+> optional LLM-judge second pass, MCPWatch runtime pairing.
 
 ## 1. The problem
 

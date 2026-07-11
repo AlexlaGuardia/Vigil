@@ -422,6 +422,63 @@ def cmd_forget(args):
         print(f"No knowledge entry found with key: {args.key}")
 
 
+def cmd_scan_tools(args):
+    """Scan MCP tool definitions for embedded imperative directives + rug-pull drift.
+
+    Registration-time companion to MCPWatch. Walks every string in a definition (no
+    field allowlist — that's the Snyk value-slot blind spot) and, with --against,
+    flags a definition that changed after approval (CVE-2025-54136 / rug pull).
+    Exit 0/1 per --fail-on, for CI gates.
+    """
+    import json as json_mod
+    from vigil.scantools import scan_tool, scan_tools, fingerprint, detect_rug_pull
+
+    _sev_rank = {"none": 0, "low": 1, "high": 2}
+
+    def _load(path):
+        with open(path) as fh:
+            return json_mod.load(fh)
+
+    if not args.definition:
+        print("  scan-tools: pass --definition <tool_def.json> (a single def or a JSON array)")
+        sys.exit(2)
+
+    loaded = _load(args.definition)
+    defs = loaded if isinstance(loaded, list) else [loaded]
+    results = scan_tools(defs)
+
+    # Optional rug-pull check against a pinned baseline definition.
+    rug_flags = []
+    if args.against:
+        baseline = _load(args.against)
+        base_defs = baseline if isinstance(baseline, list) else [baseline]
+        by_name = {d.get("function", d).get("name", "<unnamed>"): d for d in base_defs}
+        for d in defs:
+            name = d.get("function", d).get("name", "<unnamed>")
+            if name in by_name:
+                flag = detect_rug_pull(d, fingerprint(by_name[name]), pinned_def=by_name[name])
+                if flag:
+                    rug_flags.append((name, flag))
+
+    if args.json:
+        out = {"results": [r.to_dict() for r in results],
+               "rug_pull": [{"tool_name": n, **{"signal": f.signal, "excerpt": f.excerpt}}
+                            for n, f in rug_flags]}
+        print(json_mod.dumps(out, indent=2))
+    else:
+        for r in results:
+            mark = {"high": "  [HIGH]", "low": "  [low] ", "none": "  [ ok ]"}[r.severity]
+            print(f"{mark} {r.tool_name}  (score {r.score})")
+            for f in r.flags:
+                print(f"         - {f.signal} @ {f.field_path}: {f.excerpt}")
+        for name, f in rug_flags:
+            print(f"  [HIGH] {name}  RUG PULL — {f.excerpt}")
+
+    worst = max([_sev_rank[r.severity] for r in results] + [2 if rug_flags else 0])
+    if args.fail_on and worst >= _sev_rank.get(args.fail_on, 99):
+        sys.exit(1)
+
+
 def cmd_version(args):
     """Show Vigil version."""
     from vigil import __version__
@@ -1059,6 +1116,13 @@ def main():
     mcp_check_parser.add_argument("--min-tools", type=int, default=0, help="Minimum tools expected (default: 0)")
     mcp_check_parser.add_argument("--require", default="", help="Comma-separated tool names that must exist")
 
+    # scan-tools
+    scan_parser = subparsers.add_parser("scan-tools", help="Scan MCP tool definitions for poisoning + rug-pull drift")
+    scan_parser.add_argument("--definition", "-d", default="", help="Tool-definition JSON file (single def or array)")
+    scan_parser.add_argument("--against", default="", help="Pinned baseline JSON to detect post-approval drift (rug pull)")
+    scan_parser.add_argument("--fail-on", dest="fail_on", choices=["low", "high"], default="", help="Exit 1 at/above this severity (CI gate)")
+    scan_parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1093,6 +1157,7 @@ def main():
         "export": cmd_export,
         "mcp-health": cmd_mcp_health,
         "mcp-health-check": cmd_mcp_health_check,
+        "scan-tools": cmd_scan_tools,
     }
 
     handler = commands.get(args.command)
