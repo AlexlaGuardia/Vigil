@@ -149,6 +149,7 @@ class MCPWatch:
         api_url: Optional[str] = None,
         latency_threshold_ms: float = 5000.0,
         silence_threshold_min: int = 60,
+        attributor: Optional[Callable] = None,
     ):
         self.server_name = server_name
         self.db = db
@@ -167,6 +168,14 @@ class MCPWatch:
         self._total_errors = 0
         self._total_silent = 0
         self._scan_results: list = []  # scan-tools registration-time results
+        # Attribution hook (the Crumb tie-in). When a tool that scan-tools flagged HIGH
+        # at registration actually executes, we hand the call event to this callback so
+        # an attribution layer can bind it to the human who authorized the session. Vigil
+        # deliberately does NOT resolve the human itself — that's the attributor's job
+        # (Crumb pulls it from the session/RFC8693 token); Vigil supplies only the trigger
+        # and the call context. Keeps Vigil standalone; makes the Crumb tie-in a real hook.
+        self._attributor = attributor
+        self._flagged_tools: dict = {}  # tool_name -> [flagged field paths] (HIGH at registration)
 
         # Initialize DB table if local
         if self.db:
@@ -375,6 +384,23 @@ class MCPWatch:
                 signal_type="alert",
             )
 
+        # Attribution tie-in (Crumb): a tool scan-tools flagged HIGH at registration just
+        # executed — the call that walked through the door §5 says a static scan can't stop.
+        # Hand it to the attributor so the actual call gets bound to the authorizing human.
+        # Guarded: an attributor that raises must never break the monitored call.
+        if self._attributor and tool_name in self._flagged_tools:
+            try:
+                self._attributor({
+                    "server": self.server_name,
+                    "tool_name": tool_name,
+                    "status": status,
+                    "reason": "call to a tool flagged HIGH at registration (scan-tools)",
+                    "flagged_fields": self._flagged_tools[tool_name],
+                    "timestamp": now.isoformat(),
+                })
+            except Exception:
+                pass
+
     def _emit_signal(self, content: str, signal_type: str = "observation"):
         """Emit a Vigil signal — local DB or cloud API."""
         if self.db:
@@ -418,6 +444,10 @@ class MCPWatch:
         except Exception:
             return []
         self._scan_results = results
+        self._flagged_tools = {
+            r.tool_name: sorted({f.field_path for f in r.flags})
+            for r in results if r.severity == "high"
+        }
         for r in results:
             if r.severity == "high":
                 paths = ", ".join(sorted({f.field_path for f in r.flags}))
@@ -614,6 +644,7 @@ def instrument(
     latency_threshold_ms: float = 5000.0,
     silence_threshold_min: int = 60,
     scan_on_register: bool = True,
+    attributor: Optional[Callable] = None,
 ) -> MCPWatch:
     """Instrument an MCP server with production monitoring.
 
@@ -633,6 +664,11 @@ def instrument(
         scan_on_register: Run the scan-tools tool-definition scan at registration
             (default: True — opt-out). Flags an imperative directive hidden in any
             schema field before the tool's first call; a HIGH flag emits an alert.
+        attributor: Optional callback(event: dict) invoked when a tool that scanned
+            HIGH at registration actually executes — the Crumb tie-in. Vigil supplies
+            the call context (tool, status, flagged fields, timestamp); the attributor
+            binds it to the authorizing human. Vigil never resolves the human itself,
+            so it carries no attribution dependency. See docs/scan-tools-design.md §5.
 
     Returns:
         MCPWatch instance with health(), tool_stats(), recent_errors()
@@ -675,6 +711,7 @@ def instrument(
         api_url=api_url,
         latency_threshold_ms=latency_threshold_ms,
         silence_threshold_min=silence_threshold_min,
+        attributor=attributor,
     )
 
     # Wrap all registered tools — dispatches by server type

@@ -14,9 +14,17 @@
 > tool *before its first call*, and `health()` surfaces flagged tools under `registration_scan`
 > (a HIGH flag bumps a healthy server to `degraded` so it's visible in `vigil mcp-health` without
 > a call ever happening). Two checkpoints, one pane — the §4 wiring, done. +6 pairing tests.
-> **Still deferred:** REST endpoints (`/scan/*`), optional LLM-judge second pass (`--judge`, v2),
-> and the Crumb per-call attribution integration (v3, roadmap §6) — pairing surfaces the flag;
-> attributing the call that slips through to the authorizing human is the next step.
+> **v3 attribution hook landed 2026-07-11 (same day):** `instrument(mcp, attributor=...)` — when a
+> tool that scanned HIGH at registration actually executes, MCPWatch hands the call event (tool,
+> status, the exact flagged fields, timestamp) to an optional `attributor` callback. Vigil supplies
+> the trigger + context and **never resolves the human itself**, so it carries no attribution
+> dependency — Crumb (or anything) plugs in to bind the call to the authorizing human. This is the §5
+> tie-in as a real interface: scan-tools catches it at the door; the attributor catches what walks
+> through. Guarded so an attributor that raises never breaks the monitored call. +6 tests; runnable
+> end-to-end demo at `examples/scan_tools_attribution.py`.
+> **Still deferred:** REST endpoints (`/scan/*`), optional LLM-judge second pass (`--judge`, v2), and
+> the concrete Crumb-side adapter (implements this hook in the Crumb repo — a separate commit there,
+> since Vigil deliberately doesn't import Crumb).
 
 ## 1. The problem
 
