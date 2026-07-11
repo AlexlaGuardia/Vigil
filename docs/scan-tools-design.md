@@ -9,8 +9,14 @@
 > `vigil scan-tools --definition <f.json> [--against <baseline.json>] [--fail-on high] [--json]`.
 > Verified on the FINDING-11 decoy case (description swears "never exports data"; exfil
 > directive in `enum[1]`) — flagged at the exact path human review + description-only scanners miss.
-> **Deferred to v2/v3 (roadmap §6 unchanged):** REST endpoints, `instrument()` auto-scan-on-register,
-> optional LLM-judge second pass, MCPWatch runtime pairing.
+> **MCPWatch pairing landed 2026-07-11 (same day):** `instrument(mcp)` now runs the scan at
+> registration by default (`scan_on_register=True`, opt-out), emits a HIGH alert for a poisoned
+> tool *before its first call*, and `health()` surfaces flagged tools under `registration_scan`
+> (a HIGH flag bumps a healthy server to `degraded` so it's visible in `vigil mcp-health` without
+> a call ever happening). Two checkpoints, one pane — the §4 wiring, done. +6 pairing tests.
+> **Still deferred:** REST endpoints (`/scan/*`), optional LLM-judge second pass (`--judge`, v2),
+> and the Crumb per-call attribution integration (v3, roadmap §6) — pairing surfaces the flag;
+> attributing the call that slips through to the authorizing human is the next step.
 
 ## 1. The problem
 

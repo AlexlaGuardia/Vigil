@@ -166,6 +166,7 @@ class MCPWatch:
         self._total_calls = 0
         self._total_errors = 0
         self._total_silent = 0
+        self._scan_results: list = []  # scan-tools registration-time results
 
         # Initialize DB table if local
         if self.db:
@@ -404,6 +405,29 @@ class MCPWatch:
             except Exception:
                 pass
 
+    def scan_registration(self, server) -> list:
+        """Registration-time tool-definition scan (scan-tools) — the pre-flight half
+        of the pair. MCPWatch watches calls at runtime; this inspects the definitions
+        before the first call ever happens. A HIGH flag emits an alert immediately,
+        because a poisoned tool is a problem the moment it's registered, not just when
+        it fires. Best-effort: a server whose tools can't be read yields an empty scan
+        rather than raising."""
+        try:
+            from vigil.scantools import scan_server
+            results = scan_server(server)
+        except Exception:
+            return []
+        self._scan_results = results
+        for r in results:
+            if r.severity == "high":
+                paths = ", ".join(sorted({f.field_path for f in r.flags}))
+                self._emit_signal(
+                    f"scan-tools: HIGH — tool '{r.tool_name}' carries an imperative "
+                    f"directive at {paths} (flagged at registration, before first call)",
+                    signal_type="alert",
+                )
+        return results
+
     # ── Public API ───────────────────────────────────────────────
 
     def health(self) -> dict:
@@ -440,6 +464,14 @@ class MCPWatch:
         else:
             status = "healthy"
 
+        # Registration-time scan (scan-tools), surfaced alongside runtime health so a
+        # poisoned tool is visible before it's ever called — two checkpoints, one pane.
+        # A HIGH poisoning flag is its own signal, not a runtime error, so it bumps a
+        # healthy server to "degraded" (visible) without overriding a real runtime fault.
+        flagged = [r for r in self._scan_results if r.flagged]
+        if any(r.severity == "high" for r in flagged) and status == "healthy":
+            status = "degraded"
+
         return {
             "server": self.server_name,
             "status": status,
@@ -452,6 +484,14 @@ class MCPWatch:
             "last_call_at": self._last_call_at.isoformat() if self._last_call_at else None,
             "tools_monitored": len(self._stats),
             "tools": {name: s.to_dict() for name, s in self._stats.items()},
+            "registration_scan": {
+                "tools_scanned": len(self._scan_results),
+                "flagged": [
+                    {"tool_name": r.tool_name, "severity": r.severity,
+                     "fields": sorted({f.field_path for f in r.flags})}
+                    for r in flagged
+                ],
+            },
         }
 
     def tool_stats(self, tool_name: str) -> Optional[dict]:
@@ -573,6 +613,7 @@ def instrument(
     api_url: Optional[str] = None,
     latency_threshold_ms: float = 5000.0,
     silence_threshold_min: int = 60,
+    scan_on_register: bool = True,
 ) -> MCPWatch:
     """Instrument an MCP server with production monitoring.
 
@@ -589,6 +630,9 @@ def instrument(
         api_url: Vigil Cloud API URL
         latency_threshold_ms: Alert threshold in ms (default: 5000)
         silence_threshold_min: Silent server alert threshold (default: 60)
+        scan_on_register: Run the scan-tools tool-definition scan at registration
+            (default: True — opt-out). Flags an imperative directive hidden in any
+            schema field before the tool's first call; a HIGH flag emits an alert.
 
     Returns:
         MCPWatch instance with health(), tool_stats(), recent_errors()
@@ -635,6 +679,12 @@ def instrument(
 
     # Wrap all registered tools — dispatches by server type
     _patch_server(server, watch)
+
+    # Pre-flight: scan tool definitions at registration (the scan-tools half of the
+    # pair). Runtime monitoring catches misbehavior when it fires; this catches a
+    # poisoned definition before the first call.
+    if scan_on_register:
+        watch.scan_registration(server)
 
     return watch
 
