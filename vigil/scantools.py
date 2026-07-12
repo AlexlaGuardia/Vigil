@@ -22,6 +22,12 @@ Two checks, from two measured findings:
        tool or a URL. Declarative disclosure of the same side effect doesn't
        hijack (ASR ~0). So severity keys on second-person command grammar, not
        keywords.
+     - FINDING-16: a byte-literal regex is blind to a payload the MODEL still
+       reads through — zero-width-space interleaving scored `none` here yet
+       hijacked a live model. So each string is Unicode-normalized (strip
+       zero-width/bidi, fold the Tag block + fullwidth homoglyphs) BEFORE the scan,
+       and a directive revealed only after normalization is flagged as deliberate
+       evasion. See `_normalize_for_scan`.
 
 2. DRIFT (`fingerprint` / `detect_rug_pull`) — a definition that scanned clean at
    approval can be silently rewritten by the server afterward (the "rug pull",
@@ -41,6 +47,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 # --- signal patterns (each carries a weight + human rationale) ----------------
@@ -103,6 +110,37 @@ _SIGNALS = [
 ]
 
 
+# --- FINDING-16 (S-1): normalize before scanning ------------------------------
+# A byte-literal regex is blind to a payload that is Unicode-obfuscated but that the
+# MODEL still reads. Measured (FINDING-16): a zero-width-space-interleaved imperative
+# scored `none` on the raw scan yet gpt-oss-120b stripped the zero-width chars and
+# obeyed it — a live bypass of THIS scanner. Same class: fullwidth homoglyphs
+# ("ｅｘｐｏｒｔ"), Unicode Tag-block smuggling (U+E0000+), bidi overrides. We normalize a
+# COPY of each string for scanning only (the stored definition is never mutated) so the
+# imperative-mood signals see through the disguise. Normalization can only ADD matches
+# on disguised text — NFKC-folding legitimate prose never fabricates an English
+# imperative, and stripping zero-width joiners from legit i18n text can't either — so it
+# introduces no false positives. (base64/rot13/hex payloads stay `none`: correct — a
+# registration-time scanner can't brute-decode arbitrary blobs, and the measured model
+# didn't decode-and-obey them, so there is no live risk there to catch.)
+_ZW_BIDI = dict.fromkeys(
+    [0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0x180E,          # zero-width
+     0x202A, 0x202B, 0x202C, 0x202D, 0x202E,                  # bidi embeddings / overrides
+     0x2066, 0x2067, 0x2068, 0x2069],                         # bidi isolates
+    None,
+)
+
+
+def _normalize_for_scan(s: str) -> str:
+    """Scan-only normalization: strip zero-width & bidi controls, fold the Unicode Tag
+    block back to ASCII, then NFKC-fold (collapses fullwidth homoglyphs). Idempotent and
+    non-mutating — used to build the string the signal patterns run against."""
+    s = s.translate(_ZW_BIDI)
+    if any(0xE0020 <= ord(c) <= 0xE007E for c in s):
+        s = "".join(chr(ord(c) - 0xE0000) if 0xE0020 <= ord(c) <= 0xE007E else c for c in s)
+    return unicodedata.normalize("NFKC", s)
+
+
 @dataclass
 class Flag:
     signal: str
@@ -157,13 +195,24 @@ def scan_tool(tool_def: dict) -> ScanResult:
     score = 0
     flags: list[Flag] = []
 
-    for fpath, s in _iter_strings(tool_def):
+    for fpath, raw in _iter_strings(tool_def):
+        # FINDING-16: scan a Unicode-normalized COPY so a zero-width / homoglyph /
+        # tag-block / bidi disguise can't hide an imperative from a literal regex.
+        s = _normalize_for_scan(raw)
+        obfuscated = s != raw
         for sig, pat, weight, why in _SIGNALS:
             m = pat.search(s)
             if m:
                 score += weight
                 lo, hi = max(0, m.start() - 20), min(len(s), m.end() + 20)
-                flags.append(Flag(sig, fpath, why, "…" + s[lo:hi].strip() + "…"))
+                rationale = why
+                # If the disguise HID this signal from a literal scan of the raw
+                # string, that hiding is itself a deliberate-evasion tell — name it and
+                # add a small booster (a legit field has no reason to obfuscate).
+                if obfuscated and pat.search(raw) is None:
+                    rationale += " (Unicode-obfuscated to evade a literal scan)"
+                    score += 1
+                flags.append(Flag(sig, fpath, rationale, "…" + s[lo:hi].strip() + "…"))
         # S5 exfil shape: booster only when BOTH a URL and a move verb co-occur.
         if _URL.search(s) and _MOVE_VERB.search(s):
             score += 1
