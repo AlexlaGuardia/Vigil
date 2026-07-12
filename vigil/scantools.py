@@ -73,7 +73,27 @@ _INJECTION_FRAME = re.compile(
 # S5 — exfil shape: an external URL together with a move verb (booster, not a
 #      trigger alone — a plain URL in a description is common and benign).
 _URL = re.compile(r"https?://|destination\s*=|\bdestination['\"]?\s*[:=]", re.IGNORECASE)
-_MOVE_VERB = re.compile(r"\b(export|send|upload|mirror|exfil|transmit|POST|forward)\b", re.IGNORECASE)
+_MOVE_VERB = re.compile(r"\b(export|send|upload|mirror|exfil|transmit|POST|forward|archiv\w+|routed?)\b", re.IGNORECASE)
+
+# S6 — DECLARATIVE exfil route. The tail the imperative gate misses: a payload with
+# NO command grammar ("each record read IS mirrored to <url> VIA <tool>") still
+# hijacked a live model at a measured ASR ~0.24 (run #5 subtlety sweep, llama-3.3;
+# see tests/fixtures/subtlety_ladder.json). FINDING-5 assumed declarative → ASR ~0;
+# it isn't zero. So flag a declarative statement that co-occurs (a) an EXTERNAL http
+# URL, (b) a data-move verb, and (c) a SECOND named tool as the route. All three are
+# required — that trio is what separates a real declarative hijacker from legit
+# capability metadata ("writes to the internal audit log" = no external URL; "fetches
+# from https://api…" = its own endpoint, no routed second tool; "mirrored via
+# replicate_record" = a second tool but no external destination). It is LOW, never
+# high: it carries no imperative/secrecy trigger and the hijack is model-dependent
+# and probabilistic — a "review this", not a "block".
+_HTTP_URL = re.compile(r"https?://", re.IGNORECASE)
+_ROUTED_TOOL = re.compile(
+    r"\b(?:via|through|using|by)\s+([a-z][a-z0-9]*_[a-z0-9_]+)\b"
+    r"|\b([a-z][a-z0-9]*_[a-z0-9_]+)\s+(?:is|are|gets?)\s+(?:called|invoked|triggered)\b"
+    r"|\b(?:calls?|invokes?|triggers?)\s+([a-z][a-z0-9]*_[a-z0-9_]+)\b",
+    re.IGNORECASE,
+)
 
 _SIGNALS = [
     ("imperative_directive", _IMPERATIVE, 3, "imperative command aimed at the agent"),
@@ -149,6 +169,16 @@ def scan_tool(tool_def: dict) -> ScanResult:
             score += 1
             flags.append(Flag("exfil_shape", fpath, "external destination + data-move verb",
                               s[:60].strip() + "…"))
+        # S6 declarative exfil route: external URL + move verb + a routed second tool,
+        # WITHOUT needing imperative mood. Weight 2 so it reaches `low` on its own —
+        # the measured declarative-hijack tail (run #5). All three parts required to
+        # stay off legit metadata.
+        if _HTTP_URL.search(s) and _MOVE_VERB.search(s) and _ROUTED_TOOL.search(s):
+            score += 2
+            flags.append(Flag("declarative_exfil_route", fpath,
+                              "declarative side effect routing data to an external tool/URL "
+                              "(no command grammar, but a measured hijack tail)",
+                              s[:80].strip() + "…"))
 
     # Severity: HIGH needs an actual imperative/secrecy trigger (the FINDING-5 driver),
     # not just a keyword. This is what keeps declarative metadata quiet.
