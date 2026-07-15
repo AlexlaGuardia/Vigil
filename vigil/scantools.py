@@ -28,6 +28,13 @@ Two checks, from two measured findings:
        zero-width/bidi, fold the Tag block + fullwidth homoglyphs) BEFORE the scan,
        and a directive revealed only after normalization is flagged as deliberate
        evasion. See `_normalize_for_scan`.
+     - FINDING-18: because the walk enumerates strings, a payload in a JSON-Schema
+       meta-keyword ($comment, if/then, propertyNames, dependentSchemas) or behind a
+       LOCAL `#/$defs/...` `$ref` is already caught — the string is present in the
+       served def (a field-list scanner misses these; the string walker does not).
+       The lone tail is a `$ref` pointing OFF-document (remote URL / other file): its
+       target lives on a host we never fetch and the server can swap post-approval, so
+       we flag the off-document ref itself (LOW). See `_is_remote_ref`.
 
 2. DRIFT (`fingerprint` / `detect_rug_pull`) — a definition that scanned clean at
    approval can be silently rewritten by the server afterward (the "rug pull",
@@ -94,6 +101,25 @@ _MOVE_VERB = re.compile(r"\b(export|send|upload|mirror|exfil|transmit|POST|forwa
 # replicate_record" = a second tool but no external destination). It is LOW, never
 # high: it carries no imperative/secrecy trigger and the hijack is model-dependent
 # and probabilistic — a "review this", not a "block".
+# S7 — a remote/off-document `$ref`. FINDING-18: the content walker (_iter_strings)
+# already sees a payload sitting in ANY LOCAL schema slot — $comment, if/then,
+# propertyNames, dependentSchemas, or a LOCAL `#/$defs/...` `$ref` target — because the
+# string is physically present in the served definition (measured: every S-4 local
+# meta-keyword variant flags HIGH here already; Vigil walks strings, not a field list, so
+# it has no allowlist blind spot). The ONE indirection case it CANNOT see is a `$ref` that
+# points OFF the document — a URL, protocol-relative, or another file. Then the effective
+# schema (and any directive hidden in it) lives on a host this scanner never fetches (won't
+# — that's SSRF) and the server can swap post-approval, dodging BOTH the content scan and
+# the rug-pull fingerprint. A self-contained tool definition references only local `#/...`
+# pointers; a remote `$ref` is the anomaly. No visible directive → LOW (review this), never
+# high. Scoped to `$ref` only: `$id`/`$schema` legitimately carry meta-schema URIs.
+_LOCAL_REF = re.compile(r"^\s*#")  # a JSON pointer into the same document
+
+
+def _is_remote_ref(field_path: str, raw: str) -> bool:
+    return field_path.rsplit(".", 1)[-1] == "$ref" and not _LOCAL_REF.match(raw)
+
+
 _HTTP_URL = re.compile(r"https?://", re.IGNORECASE)
 _ROUTED_TOOL = re.compile(
     r"\b(?:via|through|using|by)\s+([a-z][a-z0-9]*_[a-z0-9_]+)\b"
@@ -228,6 +254,17 @@ def scan_tool(tool_def: dict) -> ScanResult:
                               "declarative side effect routing data to an external tool/URL "
                               "(no command grammar, but a measured hijack tail)",
                               s[:80].strip() + "…"))
+        # S7 (FINDING-18): a `$ref` that points off-document — the one schema-indirection
+        # channel the content walk above cannot see, because the target string lives on an
+        # unvetted remote host, not in the served definition. Checked on the RAW value (a
+        # pointer is not prose to normalize).
+        if _is_remote_ref(fpath, raw):
+            score += 2
+            flags.append(Flag("remote_schema_ref", fpath,
+                              "tool schema references an off-document $ref; the effective "
+                              "schema can hide a directive on an unvetted remote host, "
+                              "outside the content scan and the rug-pull hash",
+                              raw[:80].strip() + "…"))
 
     # Severity: HIGH needs an actual imperative/secrecy trigger (the FINDING-5 driver),
     # not just a keyword. This is what keeps declarative metadata quiet.
