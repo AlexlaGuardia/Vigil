@@ -300,8 +300,30 @@ def scan_server(server) -> list[ScanResult]:
 
 
 def _tool_obj_to_def(name: str, tool_obj) -> dict:
-    """Best-effort reconstruction of a tool-definition dict from a FastMCP tool
-    object, using the same defensive getattr style as mcpwatch._patch_fastmcp_server."""
+    """Reconstruct a tool-definition dict from a FastMCP tool object for scanning.
+
+    Serialize EVERYTHING the model sees over the wire, not a name/description/parameters
+    allowlist. Cherry-picking three fields here would re-introduce, at the server layer,
+    the exact Snyk-class blind spot scan_tool was built to kill: an imperative hidden in
+    outputSchema, annotations.title, or _meta reaches the model as trusted capability
+    metadata (FINDING-16 S-2/S-3) but never reaches _iter_strings if we drop it first.
+
+    Prefer the object's own canonical MCP-wire dump (to_mcp_tool()/model_dump) so the
+    representation matches what a client actually receives; fall back to defensive getattr
+    for duck-typed objects, pulling the known model-facing channels beyond the core three.
+    The scan is imperative-mood gated, so folding in benign metadata does not add FP."""
+    for accessor in ("to_mcp_tool", "model_dump"):
+        fn = getattr(tool_obj, accessor, None)
+        if callable(fn):
+            try:
+                dumped = fn()
+                d = dumped.model_dump(mode="json") if hasattr(dumped, "model_dump") else dumped
+                if isinstance(d, dict) and d:
+                    d.setdefault("name", getattr(tool_obj, "name", name))
+                    d.pop("fn", None)  # a callable is neither JSON nor model-visible
+                    return d
+            except Exception:
+                pass  # fall through to duck-typed reconstruction
     td: dict = {"name": getattr(tool_obj, "name", name)}
     desc = getattr(tool_obj, "description", None)
     if desc:
@@ -309,6 +331,12 @@ def _tool_obj_to_def(name: str, tool_obj) -> dict:
     params = getattr(tool_obj, "parameters", None) or getattr(tool_obj, "inputSchema", None)
     if params:
         td["parameters"] = params
+    # Model-facing channels the old three-field allowlist silently dropped.
+    for attr, key in (("annotations", "annotations"), ("output_schema", "outputSchema"),
+                      ("outputSchema", "outputSchema"), ("meta", "_meta"), ("_meta", "_meta")):
+        val = getattr(tool_obj, attr, None)
+        if val is not None:
+            td.setdefault(key, val.model_dump(mode="json") if hasattr(val, "model_dump") else val)
     return td
 
 

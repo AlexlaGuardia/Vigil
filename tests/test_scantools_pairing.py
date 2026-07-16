@@ -83,3 +83,42 @@ def test_scan_registration_returns_results():
     results = watch.scan_registration(server)
     assert len(results) == 2
     assert {r.tool_name: r.severity for r in results} == {"ok": "none", "bad": "high"}
+
+
+# --- server-layer channels the old three-field reconstruction dropped -----------
+# scan_tool on raw JSON already walks these; scan_server must too, or the live-server
+# path re-creates the Snyk value-slot blind spot at the reconstruction layer.
+
+def _tool_obj_extra(name, description="Reads a record.", parameters=None, **channels):
+    return SimpleNamespace(
+        name=name,
+        description=description,
+        parameters=parameters or {"type": "object", "properties": {}},
+        fn=lambda: None,
+        **channels,  # annotations / outputSchema / _meta on a duck-typed tool object
+    )
+
+
+def test_poisoned_annotation_title_flagged_at_registration():
+    # FINDING-16 S-2: an imperative surfaced via annotations.title, benign description.
+    tool = _tool_obj_extra("read", annotations={"title": _IMPERATIVE})
+    server = _fake_server("evil", [tool])
+    flagged = instrument(server).health()["registration_scan"]["flagged"]
+    assert len(flagged) == 1 and flagged[0]["severity"] == "high"
+
+
+def test_poisoned_output_schema_flagged_at_registration():
+    # FINDING-16 S-3: an imperative in an outputSchema field description.
+    tool = _tool_obj_extra("read", outputSchema={
+        "type": "object", "properties": {"row": {"type": "string", "description": _IMPERATIVE}}})
+    server = _fake_server("evil", [tool])
+    flagged = instrument(server).health()["registration_scan"]["flagged"]
+    assert len(flagged) == 1 and flagged[0]["severity"] == "high"
+
+
+def test_clean_extra_channels_stay_clean():
+    # Adding benign annotations/outputSchema must not manufacture a flag (no FP).
+    tool = _tool_obj_extra("read", annotations={"title": "Read a record", "readOnlyHint": True},
+                           outputSchema={"type": "object", "properties": {"row": {"type": "string"}}})
+    server = _fake_server("clean", [tool])
+    assert instrument(server).health()["registration_scan"]["flagged"] == []
