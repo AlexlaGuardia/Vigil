@@ -479,6 +479,41 @@ def cmd_scan_tools(args):
         sys.exit(1)
 
 
+def cmd_scan_model(args):
+    """Scan a serialized model config (.keras / .h5) for code-reaching operators.
+
+    FINDING-M1 companion to scan-tools. Recurses the WHOLE config tree and flags every
+    dangerous operator (Lambda / TFSMLayer / an embedded serialized callable) at any
+    depth — closing the flat top-level `class_name == "Lambda"` blind spot that lets a
+    nested or non-Lambda payload pass modelscan clean. Exit 0/1 per --fail-on for CI.
+    """
+    import json as json_mod
+    from vigil.scanmodel import scan_model_file, scan_model_config
+
+    _sev_rank = {"none": 0, "low": 1, "high": 2}
+
+    if not args.model:
+        print("  scan-model: pass --model <file.keras|.h5> (or --config <config.json>)")
+        sys.exit(2)
+
+    if args.config:
+        with open(args.model) as fh:
+            r = scan_model_config(json_mod.load(fh), name=args.model.rsplit("/", 1)[-1])
+    else:
+        r = scan_model_file(args.model)
+
+    if args.json:
+        print(json_mod.dumps(r.to_dict(), indent=2))
+    else:
+        mark = {"high": "  [HIGH]", "low": "  [low] ", "none": "  [ ok ]"}[r.severity]
+        print(f"{mark} {r.tool_name}  (score {r.score})")
+        for f in r.flags:
+            print(f"         - {f.signal} @ {f.field_path}: {f.excerpt}")
+
+    if args.fail_on and _sev_rank[r.severity] >= _sev_rank.get(args.fail_on, 99):
+        sys.exit(1)
+
+
 def cmd_version(args):
     """Show Vigil version."""
     from vigil import __version__
@@ -1123,6 +1158,13 @@ def main():
     scan_parser.add_argument("--fail-on", dest="fail_on", choices=["low", "high"], default="", help="Exit 1 at/above this severity (CI gate)")
     scan_parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
 
+    # scan-model
+    model_parser = subparsers.add_parser("scan-model", help="Scan a serialized model config (.keras/.h5) for code-reaching operators")
+    model_parser.add_argument("--model", "-m", default="", help="Model file (.keras / .h5) or a config.json with --config")
+    model_parser.add_argument("--config", action="store_true", help="Treat --model as a raw Keras config.json rather than a model archive")
+    model_parser.add_argument("--fail-on", dest="fail_on", choices=["low", "high"], default="", help="Exit 1 at/above this severity (CI gate)")
+    model_parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1158,6 +1200,7 @@ def main():
         "mcp-health": cmd_mcp_health,
         "mcp-health-check": cmd_mcp_health_check,
         "scan-tools": cmd_scan_tools,
+        "scan-model": cmd_scan_model,
     }
 
     handler = commands.get(args.command)
